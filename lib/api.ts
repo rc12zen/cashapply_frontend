@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API = axios.create({ baseURL: "http://localhost:8000" });
+export const API = axios.create({ baseURL: "http://localhost:8000" });
 
 // ── Auth (dev/test SSO bypass — see backend design doc §1.3) ──────────────
 //
@@ -125,7 +125,7 @@ export const getRunHistoryFilterOptions = () =>
  * PATH 2: date range        → aggregate from run_metrics
  * PATH 3: no params         → all completed runs
  *
- * Optional bankName / businessUnit / approvedBy scope the same query down
+ * Optional bankName / businessUnit / runBy scope the same query down
  * further (backs the dashboard's Bank / Business Unit / User dropdowns).
  *
  * Response shape (maps directly to Dashboard KPI cards). Legacy flat counts
@@ -155,7 +155,7 @@ export const getMetrics = (
   dateTo?:   string,
   bankName?: string,
   businessUnit?: string,
-  approvedBy?: string,
+  runBy?: string,
 ) => {
   const params: Record<string, string | number> = {};
   if (runId)    params.run_id    = runId;
@@ -163,7 +163,10 @@ export const getMetrics = (
   if (dateTo)   params.date_to   = dateTo;
   if (bankName)      params.bank_name      = bankName;
   if (businessUnit)  params.business_unit  = businessUnit;
-  if (approvedBy)    params.approved_by    = approvedBy;
+  // PATCH: was approved_by (RowStatusHistory — required a human to have
+  // approved/rejected a row first). Now run_by (AnalysisRun.triggered_by —
+  // who STARTED the run), known immediately for every run.
+  if (runBy)    params.run_by    = runBy;
   return API.get("/api/results/metrics", { params });
 };
 
@@ -337,9 +340,8 @@ export const selectAgingSource = (sourceFileId: number) =>
 // ── Filters ───────────────────────────────────────────────────────────────────
 /**
  * Returns { banks: string[], business_units: string[], users: string[] }.
- * `users` is now backed by LineItem.approved_by (populated once a SPOC
- * approves/rejects at least one row) — will be empty until the first
- * approval action happens in a fresh environment.
+ * `users` is backed by AnalysisRun.triggered_by (who started the run) —
+ * populated immediately, no need to wait for a HITL approve/reject.
  */
 export const getFilterOptions = (runId?: number) =>
   API.get("/api/filters/options", { params: runId ? { run_id: runId } : {} });
@@ -381,7 +383,7 @@ export const getExecutiveSummary = (params: {
   dateFrom?: string;
   dateTo?: string;
   runId?: number;
-  approvedBy?: string;
+  runBy?: string;
 } = {}) =>
   API.get("/api/executive-summary/summary", {
     params: {
@@ -391,7 +393,7 @@ export const getExecutiveSummary = (params: {
       date_from: params.dateFrom,
       date_to: params.dateTo,
       run_id: params.runId,
-      approved_by: params.approvedBy,
+      run_by: params.runBy,
     },
   });
 
@@ -407,7 +409,7 @@ export const getExecutiveRecords = (params: {
   dateTo?: string;
   runId?: number;
   category?: string;
-  approvedBy?: string;
+  runBy?: string;
   page?: number;
   pageSize?: number;
 } = {}) =>
@@ -420,7 +422,7 @@ export const getExecutiveRecords = (params: {
       date_to: params.dateTo,
       run_id: params.runId,
       category: params.category,
-      approved_by: params.approvedBy,
+      run_by: params.runBy,
       page: params.page ?? 1,
       page_size: params.pageSize ?? 50,
     },
@@ -438,7 +440,7 @@ export const exportExecutiveCsv = (params: {
   dateTo?: string;
   runId?: number;
   category?: string;
-  approvedBy?: string;
+  runBy?: string;
 } = {}) =>
   API.get("/api/executive-summary/export", {
     params: {
@@ -449,7 +451,7 @@ export const exportExecutiveCsv = (params: {
       date_to: params.dateTo,
       run_id: params.runId,
       category: params.category,
-      approved_by: params.approvedBy,
+      run_by: params.runBy,
     },
     responseType: "blob",
   });
@@ -466,7 +468,7 @@ export const getNonPostedSummary = (params: {
   dateFrom?: string;
   dateTo?: string;
   runId?: number;
-  approvedBy?: string;
+  runBy?: string;
 } = {}) =>
   API.get("/api/executive-summary/non-posted/summary", {
     params: {
@@ -476,7 +478,7 @@ export const getNonPostedSummary = (params: {
       date_from: params.dateFrom,
       date_to: params.dateTo,
       run_id: params.runId,
-      approved_by: params.approvedBy,
+      run_by: params.runBy,
     },
   });
 
@@ -488,7 +490,7 @@ export const getNonPostedRecords = (params: {
   dateTo?: string;
   runId?: number;
   category?: string;
-  approvedBy?: string;
+  runBy?: string;
   page?: number;
   pageSize?: number;
 } = {}) =>
@@ -501,7 +503,7 @@ export const getNonPostedRecords = (params: {
       date_to: params.dateTo,
       run_id: params.runId,
       category: params.category,
-      approved_by: params.approvedBy,
+      run_by: params.runBy,
       page: params.page ?? 1,
       page_size: params.pageSize ?? 50,
     },

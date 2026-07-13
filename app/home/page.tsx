@@ -52,6 +52,7 @@ import {deleteFile,
   uploadStatement,
 } from "@/lib/api";
 import { detectForFile } from "@/lib/configBuilderApi";
+import { getAiUsageSummary, type AiUsageSummary } from "@/lib/ai-usage/api";
 import ConfigBuilderWizard from "@/components/ConfigBuilderWizard";
 import ConfigResolveDialog from "@/components/ConfigResolveDialog";
 
@@ -193,6 +194,7 @@ export default function Dashboard() {
 
   const [userDisplayName, setUserDisplayName] = useState("Admin User");
   const [aiPanelVisible, setAiPanelVisible]   = useState(true);
+  const [aiUsage, setAiUsage] = useState<AiUsageSummary | null>(null);
   const [successMessage, setSuccessMessage]   = useState("");
 
   // PATCH: completion banner now reports the new taxonomy too.
@@ -247,12 +249,18 @@ export default function Dashboard() {
       const buFilter   = selectedBU   !== "All BUs"   ? selectedBU   : undefined;
       const userFilter = selectedUser !== "All Users" ? selectedUser : undefined;
 
-      const [m, a] = await Promise.all([
+      const [m, a, ai] = await Promise.all([
         getMetrics(runId, dateFrom, dateTo, bankFilter, buFilter, userFilter),
         getAgingStatus(),
+        // AI Run Details panel — scoped to the same run as "Last Analysis";
+        // for a date-range period (Today/WTD/etc, no single runId) this
+        // falls back to an all-time total across every AI call ever made,
+        // since /api/ai-usage/summary only supports run_id scoping today.
+        getAiUsageSummary(runId).catch(() => ({ data: null })),
       ]);
       setMetrics(m.data);
       setAgingStatus(a.data);
+      setAiUsage(ai.data);
     } catch {}
   }, [selectedBank, selectedBU, selectedUser]);
 
@@ -1257,7 +1265,7 @@ export default function Dashboard() {
 									AI Run Details
 								</h4>
 								<p className="text-[11px] text-gray-500 mt-0.5">
-									AI run details framework data specifications.
+									Layer 2B AI extraction token consumption and cost{aiUsage && aiUsage.call_count === 0 ? " — no AI fallback calls needed for this scope (Layer 2A regex resolved everything)" : ""}.
 								</p>
 							</div>
 							<button
@@ -1270,12 +1278,12 @@ export default function Dashboard() {
 						{aiPanelVisible && (
 							<div className="grid grid-cols-2 sm:grid-cols-3 gap-y-5 gap-x-6">
 								{[
-									["Model", "Claude Sonnet 4"],
-									["Prompt Version", "v3.0"],
-									["Tokens In", "42,800"],
-									["Tokens Out", "8,140"],
-									["Estimated Cost", "$0.18"],
-									["Latency", "34.2 sec"],
+									["Model", aiUsage?.model ?? "—"],
+									["AI Calls", (aiUsage?.call_count ?? 0).toLocaleString()],
+									["Tokens In", (aiUsage?.total_input_tokens ?? 0).toLocaleString()],
+									["Tokens Out", (aiUsage?.total_output_tokens ?? 0).toLocaleString()],
+									["Estimated Cost", `$${(aiUsage?.total_cost_usd ?? 0).toFixed(4)}`],
+									["Avg Latency", aiUsage?.avg_latency_ms != null ? `${(aiUsage.avg_latency_ms / 1000).toFixed(1)} sec` : "—"],
 								].map(([label, value]) => (
 									<div key={label} className="space-y-0.5">
 										<span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block">

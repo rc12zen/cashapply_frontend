@@ -166,7 +166,7 @@ export default function ExecutiveSummaryPage() {
       return {
         bankName: selectedBank !== "All Banks" ? selectedBank : undefined,
         businessUnit: selectedBU !== "All BUs" ? selectedBU : undefined,
-        approvedBy: selectedUser !== "All Users" ? selectedUser : undefined,
+        runBy: selectedUser !== "All Users" ? selectedUser : undefined,
         dateFrom: (dr as any).date_from,
         dateTo: (dr as any).date_to,
         category: activePill || undefined,
@@ -216,7 +216,7 @@ export default function ExecutiveSummaryPage() {
       return {
         bankName: selectedBank !== "All Banks" ? selectedBank : undefined,
         businessUnit: selectedBU !== "All BUs" ? selectedBU : undefined,
-        approvedBy: selectedUser !== "All Users" ? selectedUser : undefined,
+        runBy: selectedUser !== "All Users" ? selectedUser : undefined,
         dateFrom: (dr as any).date_from,
         dateTo: (dr as any).date_to,
         category: activeNonPostedPill || undefined,
