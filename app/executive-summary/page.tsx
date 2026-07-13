@@ -432,24 +432,21 @@ export default function ExecutiveSummaryPage() {
           </div>
         </div>
 
-        {/* USER — pill row, same pattern as the Home dashboard's user filter */}
+        {/* USER — dropdown, matching the Bank/BU selects above */}
         <div className="flex flex-wrap items-center gap-2">
           <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 mr-1">
             <User size={12} /> User
           </span>
-          <div className="flex flex-wrap items-center gap-1 bg-gray-100 p-1 rounded-sm">
-            {["All Users", ...userOptions].map((u) => (
-              <button
-                key={u}
-                type="button"
-                onClick={() => setSelectedUser(u)}
-                className={`px-3 py-1 text-[10px] font-bold rounded-xs transition-all cursor-pointer whitespace-nowrap ${
-                  selectedUser === u ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"
-                }`}
-              >
-                {u}
-              </button>
-            ))}
+          <div className="relative">
+            <select
+              value={selectedUser}
+              onChange={(e) => setSelectedUser(e.target.value)}
+              className="w-full bg-white border border-gray-300 text-xs font-bold text-primary pl-3 pr-8 py-2 rounded-sm appearance-none focus:outline-none focus:border-accent cursor-pointer"
+            >
+              <option>All Users</option>
+              {userOptions.map((o) => <option key={o}>{o}</option>)}
+            </select>
+            <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
         </div>
 

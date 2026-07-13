@@ -629,26 +629,19 @@ function AnalysisHistoryPageInner() {
           </div>
         </div>
 
-        {/* PATCH: "Started By" pill row — real server-side filter (AnalysisRun.
-            triggered_by), unlike the free-text search above which only narrows
-            whatever page of runs is already loaded. */}
+        {/* "Started By" — real server-side filter (AnalysisRun.triggered_by),
+            unlike the free-text search above which only narrows whatever
+            page of runs is already loaded. Dropdown to match Bank/BU above. */}
         <div className="flex flex-wrap items-center gap-2">
           <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 mr-1">
             <User size={12} /> Started By
           </span>
-          <div className="flex flex-wrap items-center gap-1 bg-gray-100 p-1 rounded-xs">
-            {["All Users", ...triggeredByOptions].map((u) => (
-              <button
-                key={u}
-                type="button"
-                onClick={() => setSelectedTriggeredBy(u)}
-                className={`px-3 py-1 text-[10px] font-bold rounded-xs transition-all cursor-pointer whitespace-nowrap ${
-                  selectedTriggeredBy === u ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"
-                }`}
-              >
-                {u}
-              </button>
-            ))}
+          <div className="relative">
+            <select value={selectedTriggeredBy} onChange={(e) => setSelectedTriggeredBy(e.target.value)}
+              className="w-full bg-white border border-gray-300 text-xs font-bold text-primary pl-3 pr-8 py-2 rounded-sm appearance-none focus:outline-none focus:border-[#4A90E2] cursor-pointer">
+              <option>All Users</option>{triggeredByOptions.map((u) => <option key={u}>{u}</option>)}
+            </select>
+            <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
         </div>
 

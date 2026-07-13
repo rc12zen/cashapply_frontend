@@ -246,9 +246,8 @@ export default function Dashboard() {
       let dateTo:   string | undefined;
 
       if (period === "Last Analysis") {
-        const histRes = await getRunHistory(1, 10);
-        const latest  = (histRes.data.data || []).find((r: any) => r.status === "completed");
-        runId = latest?.run_id;
+        const histRes = await getRunHistory(1, 1, undefined, undefined, undefined, undefined, undefined, "completed");
+        runId = histRes.data.data?.[0]?.run_id;
       } else {
         const dr = buildDateRange(period, cStart, cEnd);
         dateFrom = (dr as any).date_from;
@@ -987,8 +986,7 @@ export default function Dashboard() {
 										onChange={(e) => {
 											const v = e.target.value;
 											setCustomStartDate(v);
-											if (customEndDate)
-												doFetchMetrics("Custom Date", v, customEndDate);
+											doFetchMetrics("Custom Date", v, customEndDate);
 										}}
 										className="bg-gray-50 border border-gray-300 rounded-sm text-[10px] font-bold text-gray-600 px-2 py-1 outline-none focus:border-accent"
 									/>
@@ -1001,8 +999,7 @@ export default function Dashboard() {
 										onChange={(e) => {
 											const v = e.target.value;
 											setCustomEndDate(v);
-											if (customStartDate)
-												doFetchMetrics("Custom Date", customStartDate, v);
+											doFetchMetrics("Custom Date", customStartDate, v);
 										}}
 										className="bg-gray-50 border border-gray-300 rounded-sm text-[10px] font-bold text-gray-600 px-2 py-1 outline-none focus:border-accent"
 									/>
