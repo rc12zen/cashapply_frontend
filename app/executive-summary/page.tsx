@@ -18,7 +18,7 @@
 import {
   AlertTriangle, Briefcase, Calendar, CheckCircle2,
   ChevronDown, ChevronLeft, ChevronRight, Download, Landmark,
-  Loader2, RefreshCw, ShieldAlert, X,
+  Loader2, RefreshCw, ShieldAlert, User, X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -123,6 +123,8 @@ export default function ExecutiveSummaryPage() {
 
   const [selectedBank, setSelectedBank] = useState("All Banks");
   const [selectedBU, setSelectedBU] = useState("All BUs");
+  const [userOptions, setUserOptions] = useState<string[]>([]);
+  const [selectedUser, setSelectedUser] = useState("All Users");
   const [timePeriod, setTimePeriod] = useState("All Time");
   const [isCustomDateActive, setIsCustomDateActive] = useState(false);
   const [customStartDate, setCustomStartDate] = useState("");
@@ -164,12 +166,13 @@ export default function ExecutiveSummaryPage() {
       return {
         bankName: selectedBank !== "All Banks" ? selectedBank : undefined,
         businessUnit: selectedBU !== "All BUs" ? selectedBU : undefined,
+        approvedBy: selectedUser !== "All Users" ? selectedUser : undefined,
         dateFrom: (dr as any).date_from,
         dateTo: (dr as any).date_to,
         category: activePill || undefined,
       };
     },
-    [selectedBank, selectedBU, timePeriod, customStartDate, customEndDate, activePill],
+    [selectedBank, selectedBU, selectedUser, timePeriod, customStartDate, customEndDate, activePill],
   );
 
   const fetchFilterOptions = useCallback(async (mode: "posted" | "non_posted") => {
@@ -178,6 +181,7 @@ export default function ExecutiveSummaryPage() {
       setBankOptions(res.data.banks || []);
       setBuOptions(res.data.business_units || []);
       setPillDefs(res.data.pills || []);
+      setUserOptions(res.data.users || []);
     } catch {
       // non-fatal — filter dropdowns just stay empty
     }
@@ -212,12 +216,13 @@ export default function ExecutiveSummaryPage() {
       return {
         bankName: selectedBank !== "All Banks" ? selectedBank : undefined,
         businessUnit: selectedBU !== "All BUs" ? selectedBU : undefined,
+        approvedBy: selectedUser !== "All Users" ? selectedUser : undefined,
         dateFrom: (dr as any).date_from,
         dateTo: (dr as any).date_to,
         category: activeNonPostedPill || undefined,
       };
     },
-    [selectedBank, selectedBU, timePeriod, customStartDate, customEndDate, activeNonPostedPill],
+    [selectedBank, selectedBU, selectedUser, timePeriod, customStartDate, customEndDate, activeNonPostedPill],
   );
 
   const fetchNonPostedSummary = useCallback(async () => {
@@ -264,7 +269,7 @@ export default function ExecutiveSummaryPage() {
   useEffect(() => {
     refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBank, selectedBU, timePeriod, customStartDate, customEndDate, activePill, activeNonPostedPill, viewMode]);
+  }, [selectedBank, selectedBU, selectedUser, timePeriod, customStartDate, customEndDate, activePill, activeNonPostedPill, viewMode]);
 
   const handleExport = async () => {
     setExporting(true);
@@ -289,6 +294,7 @@ export default function ExecutiveSummaryPage() {
   const clearFilters = () => {
     setSelectedBank("All Banks");
     setSelectedBU("All BUs");
+    setSelectedUser("All Users");
     setTimePeriod("All Time");
     setIsCustomDateActive(false);
     setCustomStartDate("");
@@ -298,8 +304,8 @@ export default function ExecutiveSummaryPage() {
   };
 
   const hasActiveFilters =
-    selectedBank !== "All Banks" || selectedBU !== "All BUs" || timePeriod !== "All Time" ||
-    !!activePill || !!activeNonPostedPill;
+    selectedBank !== "All Banks" || selectedBU !== "All BUs" || selectedUser !== "All Users" ||
+    timePeriod !== "All Time" || !!activePill || !!activeNonPostedPill;
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -423,6 +429,27 @@ export default function ExecutiveSummaryPage() {
               {buOptions.map((o) => <option key={o}>{o}</option>)}
             </select>
             <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+        </div>
+
+        {/* USER — pill row, same pattern as the Home dashboard's user filter */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 mr-1">
+            <User size={12} /> User
+          </span>
+          <div className="flex flex-wrap items-center gap-1 bg-gray-100 p-1 rounded-sm">
+            {["All Users", ...userOptions].map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => setSelectedUser(u)}
+                className={`px-3 py-1 text-[10px] font-bold rounded-xs transition-all cursor-pointer whitespace-nowrap ${
+                  selectedUser === u ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"
+                }`}
+              >
+                {u}
+              </button>
+            ))}
           </div>
         </div>
 

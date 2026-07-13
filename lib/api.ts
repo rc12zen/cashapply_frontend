@@ -101,16 +101,20 @@ export const getRunHistory = (
   dateTo?:   string,
   bankName?: string,
   businessUnit?: string,
-  approvedBy?: string,
+  triggeredBy?: string,
 ) => {
   const params: Record<string, string | number> = { page, page_size: pageSize };
   if (dateFrom) params.date_from = dateFrom;
   if (dateTo)   params.date_to   = dateTo;
   if (bankName)     params.bank_name     = bankName;
   if (businessUnit) params.business_unit = businessUnit;
-  if (approvedBy)   params.approved_by   = approvedBy;
+  if (triggeredBy)  params.triggered_by  = triggeredBy;
   return API.get("/api/run/history", { params });
 };
+
+/** "Started By" pill options for the Analysis History page — distinct AnalysisRun.triggered_by values. */
+export const getRunHistoryFilterOptions = () =>
+  API.get("/api/run/history/filter-options");
 
 // ── Results ───────────────────────────────────────────────────────────────────
 
@@ -377,6 +381,7 @@ export const getExecutiveSummary = (params: {
   dateFrom?: string;
   dateTo?: string;
   runId?: number;
+  approvedBy?: string;
 } = {}) =>
   API.get("/api/executive-summary/summary", {
     params: {
@@ -386,6 +391,7 @@ export const getExecutiveSummary = (params: {
       date_from: params.dateFrom,
       date_to: params.dateTo,
       run_id: params.runId,
+      approved_by: params.approvedBy,
     },
   });
 
@@ -401,6 +407,7 @@ export const getExecutiveRecords = (params: {
   dateTo?: string;
   runId?: number;
   category?: string;
+  approvedBy?: string;
   page?: number;
   pageSize?: number;
 } = {}) =>
@@ -413,6 +420,7 @@ export const getExecutiveRecords = (params: {
       date_to: params.dateTo,
       run_id: params.runId,
       category: params.category,
+      approved_by: params.approvedBy,
       page: params.page ?? 1,
       page_size: params.pageSize ?? 50,
     },
@@ -430,6 +438,7 @@ export const exportExecutiveCsv = (params: {
   dateTo?: string;
   runId?: number;
   category?: string;
+  approvedBy?: string;
 } = {}) =>
   API.get("/api/executive-summary/export", {
     params: {
@@ -440,6 +449,7 @@ export const exportExecutiveCsv = (params: {
       date_to: params.dateTo,
       run_id: params.runId,
       category: params.category,
+      approved_by: params.approvedBy,
     },
     responseType: "blob",
   });
@@ -456,6 +466,7 @@ export const getNonPostedSummary = (params: {
   dateFrom?: string;
   dateTo?: string;
   runId?: number;
+  approvedBy?: string;
 } = {}) =>
   API.get("/api/executive-summary/non-posted/summary", {
     params: {
@@ -465,6 +476,7 @@ export const getNonPostedSummary = (params: {
       date_from: params.dateFrom,
       date_to: params.dateTo,
       run_id: params.runId,
+      approved_by: params.approvedBy,
     },
   });
 
@@ -476,6 +488,7 @@ export const getNonPostedRecords = (params: {
   dateTo?: string;
   runId?: number;
   category?: string;
+  approvedBy?: string;
   page?: number;
   pageSize?: number;
 } = {}) =>
@@ -488,6 +501,7 @@ export const getNonPostedRecords = (params: {
       date_to: params.dateTo,
       run_id: params.runId,
       category: params.category,
+      approved_by: params.approvedBy,
       page: params.page ?? 1,
       page_size: params.pageSize ?? 50,
     },

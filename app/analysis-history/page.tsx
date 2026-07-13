@@ -54,7 +54,7 @@ import StatusBadge from "@/components/StatusBadge";
 import ReasonBadge from "@/components/ReasonBadge";
 import BreakupModal from "@/components/BreakupModal";
 import {
-  getRunHistory, getRunSummary, approveEntry, rejectEntry,
+  getRunHistory, getRunHistoryFilterOptions, getRunSummary, approveEntry, rejectEntry,
   getFilterOptions, getFilePreview, getAgingPreview, retryOracle, getBreakupAnalysis,
 } from "@/lib/api";
 
@@ -368,6 +368,11 @@ function AnalysisHistoryPageInner() {
   const [searchUser, setSearchUser]               = useState("");
   const [bankOptions, setBankOptions]             = useState<string[]>([]);
   const [buOptions, setBuOptions]                 = useState<string[]>([]);
+  // PATCH: server-side "Started By" pill filter — was previously just a
+  // free-text client-side search (searchUser, kept below as a secondary
+  // refinement) with no real backend filtering at all.
+  const [triggeredByOptions, setTriggeredByOptions] = useState<string[]>([]);
+  const [selectedTriggeredBy, setSelectedTriggeredBy] = useState("All Users");
   const [runs, setRuns]                           = useState<AnalysisRun[]>([]);
   const [loading, setLoading]                     = useState(false);
 
@@ -397,24 +402,27 @@ function AnalysisHistoryPageInner() {
     try {
       const pageSize  = period === "Latest" ? 5 : 50;
       const dr        = buildDateRange(period, cStart, cEnd);
-      const [runsRes, filtersRes] = await Promise.all([
-        getRunHistory(1, pageSize, (dr as any).date_from, (dr as any).date_to),
+      const triggeredByFilter = selectedTriggeredBy !== "All Users" ? selectedTriggeredBy : undefined;
+      const [runsRes, filtersRes, triggeredByRes] = await Promise.all([
+        getRunHistory(1, pageSize, (dr as any).date_from, (dr as any).date_to, undefined, undefined, triggeredByFilter),
         getFilterOptions(),
+        getRunHistoryFilterOptions(),
       ]);
       setRuns(runsRes.data.data || []);
       setBankOptions(filtersRes.data.banks || []);
       setBuOptions(filtersRes.data.business_units || []);
+      setTriggeredByOptions(triggeredByRes.data.users || []);
     } catch {}
     setLoading(false);
-  }, []);
+  }, [selectedTriggeredBy]);
 
   useEffect(() => {
     if (timePeriod === "Custom Range") return;
     doLoadRuns(timePeriod, customStart, customEnd);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timePeriod]);
+  }, [timePeriod, selectedTriggeredBy]);
 
-  useEffect(() => { doLoadRuns("Latest", "", ""); }, [doLoadRuns]);
+  useEffect(() => { doLoadRuns("Latest", "", ""); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadRunDetail = useCallback(async (run: AnalysisRun) => {
     setLoading(true);
@@ -618,6 +626,29 @@ function AnalysisHistoryPageInner() {
             <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" placeholder="Search by user..." value={searchUser} onChange={(e) => setSearchUser(e.target.value)}
               className="w-full bg-white border border-gray-300 text-xs font-semibold text-primary pl-9 pr-4 py-2.5 rounded-sm focus:outline-none focus:border-[#4A90E2]" />
+          </div>
+        </div>
+
+        {/* PATCH: "Started By" pill row — real server-side filter (AnalysisRun.
+            triggered_by), unlike the free-text search above which only narrows
+            whatever page of runs is already loaded. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 mr-1">
+            <User size={12} /> Started By
+          </span>
+          <div className="flex flex-wrap items-center gap-1 bg-gray-100 p-1 rounded-xs">
+            {["All Users", ...triggeredByOptions].map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => setSelectedTriggeredBy(u)}
+                className={`px-3 py-1 text-[10px] font-bold rounded-xs transition-all cursor-pointer whitespace-nowrap ${
+                  selectedTriggeredBy === u ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"
+                }`}
+              >
+                {u}
+              </button>
+            ))}
           </div>
         </div>
 
