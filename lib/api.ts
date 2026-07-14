@@ -310,6 +310,11 @@ export const rejectEntry        = (id: number, comment?: string) => API.post(`/a
 export const approveBulk        = (ids: number[])                => API.post("/api/hitl/approve-bulk", { ids });
 export const getHitlHistory     = ()                             => API.get("/api/hitl/history");
 export const retryOracle        = (id: number)                   => API.post(`/api/hitl/retry-oracle/${id}`);
+// Manual counterpart to the periodic remittance_recheck_worker (see
+// rule_engine/remittance_recheck.py) — re-checks THIS row against
+// remittances persisted since it landed in needs_remittance, instead of
+// waiting for the next scheduled sweep (REMITTANCE_RECHECK_INTERVAL_SECONDS).
+export const recheckRemittance  = (id: number)                   => API.post(`/api/hitl/${id}/recheck-remittance`);
 
 // ── Manual invoice mapping ───────────────────────────────────────────────────
 // For rows that didn't land in ready_for_oracle automatically. Confirming

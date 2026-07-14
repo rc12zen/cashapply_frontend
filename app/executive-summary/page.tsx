@@ -338,7 +338,7 @@ export default function ExecutiveSummaryPage() {
             onClick={() => setViewMode("non_posted")}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-xs transition-all cursor-pointer ${viewMode === "non_posted" ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}
           >
-            <ShieldAlert size={11} /> Non-Posted Overview
+            <ShieldAlert size={11} /> No Invoice Mapped Records
           </button>
         </div>
       </div>
