@@ -10,13 +10,20 @@ import {
 	Menu,
 	Settings,
 	User,
+	Users,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getMe } from "@/lib/api";
 
-const navItems = [
+const navItems: {
+	href: string;
+	label: string;
+	icon: typeof Home;
+	section: string;
+	requiresAdmin?: boolean;
+}[] = [
 	{ href: "/home", label: "Home", icon: Home, section: "Main" },
 	{
 		href: "/analysis-history",
@@ -38,6 +45,8 @@ const navItems = [
 		section: "Settings",
 	},
 	{ href: "/config", label: "Config", icon: Settings, section: "Settings" },
+	// Admin-only — gated below by the current user's permissions from /me.
+	{ href: "/users", label: "Users", icon: Users, section: "Settings", requiresAdmin: true },
 ];
 
 export default function RootLayout({
@@ -55,8 +64,13 @@ export default function RootLayout({
 	// during testing which role's permission set is actually in effect;
 	// see backend design doc §7 for the role list.
 	const [userRole, setUserRole] = useState<string | null>(null);
+	// Admin gate for the Users tab — derived from the permissions /me returns,
+	// which are resolved server-side from the user's role (not trusted from the
+	// cookie). Administrator holds "*"; "user:manage" is the explicit code.
+	const [isAdmin, setIsAdmin] = useState(false);
 
 	const isLoginPage = pathname === "/";
+	const visibleNavItems = navItems.filter((i) => !i.requiresAdmin || isAdmin);
 
 	useEffect(() => {
 		if (isLoginPage) return;
@@ -77,8 +91,12 @@ export default function RootLayout({
 			setUserIdentifier(identifier);
 
 			getMe()
-				.then((res) => setUserRole(res.data?.role ?? null))
-				.catch(() => setUserRole(null)); // 401 handled globally by lib/api.ts's interceptor
+				.then((res) => {
+					setUserRole(res.data?.role ?? null);
+					const perms: string[] = res.data?.permissions ?? [];
+					setIsAdmin(perms.includes("user:manage") || perms.includes("*"));
+				})
+				.catch(() => { setUserRole(null); setIsAdmin(false); }); // 401 handled globally by lib/api.ts's interceptor
 		}
 	}, [isLoginPage, pathname]);
 
@@ -174,13 +192,13 @@ export default function RootLayout({
 								}`}
 							>
 								<nav className="flex-1 py-3 space-y-1.5 overflow-y-auto overflow-x-hidden">
-									{navItems.map(
+									{visibleNavItems.map(
 										({ href, label, icon: Icon, section }, index) => {
 											const active = pathname === href;
 
 											// Determine if this item is the start of a new visual section group
 											const showSectionHeader =
-												index === 0 || navItems[index - 1].section !== section;
+												index === 0 || visibleNavItems[index - 1].section !== section;
 
 											return (
 												<div key={href} className="space-y-0.5">
