@@ -77,6 +77,13 @@ interface RowDetail {
   is_cross_currency?: boolean;   // credited currency != invoice currency
   is_cross_ledger?:   boolean;   // invoice currency != OU functional currency
   is_cross_ou?:       boolean;   // payment landed in different OU than invoice
+  // PATCH: persistent record of whether THIS row's current invoice mapping
+  // came from a SPOC manually picking invoice(s) via the Manual Invoice
+  // Mapping card, vs automatic AI/regex extraction or an automatic aging
+  // match. Backend: LineItem.manually_mapped (see db/models.py).
+  manually_mapped?:    boolean;
+  manually_mapped_at?: string | null;
+  manually_mapped_by?: string | null;
   bank_statement: {
     bank_name:           string;
     statement_date:      string | null;
@@ -541,6 +548,12 @@ export default function RowDetailPage() {
   const [mappingPreviewLoading, setMappingPreviewLoading] = useState(false);
   const [confirmMappingLoading, setConfirmMappingLoading] = useState(false);
   const [confirmMappingError, setConfirmMappingError]   = useState("");
+  // PATCH: whether the invoice picker is expanded even though this row is
+  // already manually mapped. Starts collapsed — see the "already mapped"
+  // summary block in CARD 2.5 below, which is the fix for the picker
+  // re-appearing blank after a successful confirm with no indication
+  // anything had happened.
+  const [showRemapPicker, setShowRemapPicker] = useState(false);
 
   const fetchDetail = useCallback(async () => {
     if (!recordId) return;
@@ -551,6 +564,7 @@ export default function RowDetailPage() {
   }, [recordId]);
 
   useEffect(() => { fetchDetail(); }, [fetchDetail]);
+  useEffect(() => { setShowRemapPicker(false); }, [recordId]);
 
   // Auto-open remittance panel when one was found
   useEffect(() => { if (detail?.remittance) setRemittanceCollapsed(false); }, [detail?.remittance]);
@@ -629,7 +643,17 @@ export default function RowDetailPage() {
       setSelectedInvoiceNumbers(new Set());
       setMappingPreview(null);
       setMappingOptions(null);
-      await fetchDetail();  // row's category should now be ready_for_oracle — Approve button appears, this card disappears
+      // PATCH: was "row's category should now be ready_for_oracle — this
+      // card disappears" — true for a fresh unidentified/needs_remittance/
+      // conflict_exception row, but NOT for a post_failed/rejected row
+      // being re-mapped: bff/metrics.py's _category_for_row() lets a
+      // terminal reference_status ("failed"/rejected hitl_status) override
+      // rule_id permanently, so category stays post_failed/rejected even
+      // after a valid re-map. This card now stays mounted either way and
+      // shows the "already mapped" summary below instead — see
+      // alreadyMapped/showRemapPicker.
+      setShowRemapPicker(false);
+      await fetchDetail();
     } catch (e: any) {
       setConfirmMappingError(formatApiError(e, "Could not confirm this mapping."));
     }
@@ -697,6 +721,15 @@ export default function RowDetailPage() {
   const status       = deriveStatus(oracle);
   const isProcessed  = status === "processed";
   const isPostFailed = status === "post_failed";
+
+  // PATCH: whether this row already has a valid SPOC-confirmed mapping —
+  // used by CARD 2.5 below to show a clear "already mapped" summary
+  // instead of re-presenting a blank invoice picker. Requires both the
+  // persistent manually_mapped flag (db/models.py) AND an actual
+  // confirmed invoice to show (belt-and-suspenders — manually_mapped
+  // should never be true with zero confirmed_invoices, but don't render
+  // a summary with nothing in it if that ever happens).
+  const alreadyMapped = !!detail.manually_mapped && confirmed_invoices.length > 0;
 
   // Approve: only for ready_for_oracle rows that haven't been acted on
   // Primary gate: category from backend (_category_for_row in metrics.py).
@@ -1019,10 +1052,61 @@ export default function RowDetailPage() {
                 <CardHead
                   icon={<Hash size={13} />}
                   title="Manual Invoice Mapping"
-                  right={<span className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Optional — from aging report</span>}
+                  right={
+                    alreadyMapped ? (
+                      <span className="flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-100 uppercase tracking-wider px-2 py-1 rounded-xs">
+                        <CheckCircle2 size={10} /> Manually Mapped
+                      </span>
+                    ) : (
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Optional — from aging report</span>
+                    )
+                  }
                 />
                 <div className="px-5 py-5 space-y-4">
-                  {mappingOptionsLoading ? (
+                  {alreadyMapped && !showRemapPicker ? (
+                    // ══════════════════════════════════════════════
+                    // "ALREADY MAPPED" SUMMARY — the fix. Previously this
+                    // card always rendered the blank picker below, even
+                    // right after a successful Confirm Mapping, making it
+                    // look like nothing had happened (the row's category
+                    // can stay post_failed/rejected even after a valid
+                    // re-map — see handleConfirmMapping's comment above).
+                    // ══════════════════════════════════════════════
+                    <div className="space-y-3">
+                      <div className="flex items-start gap-3 px-4 py-3 rounded-xs border bg-emerald-50 border-emerald-200">
+                        <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[12px] font-bold text-emerald-800">
+                            This row is manually mapped to {confirmed_invoices.length === 1 ? "invoice" : "invoice(s)"}{" "}
+                            {confirmed_invoices.map((inv, i) => (
+                              <span key={inv.invoice_number} className="font-mono">
+                                {i > 0 && ", "}{inv.invoice_number}
+                              </span>
+                            ))}.
+                          </p>
+                          <p className="text-[11px] text-emerald-700 mt-1">
+                            {isPostFailed
+                              ? <>The Oracle post failed before — click <span className="font-bold">Retry Post</span> above to send this mapping to Oracle. No need to map it again.</>
+                              : detail.category === "rejected"
+                              ? <>This row was rejected. Reject is terminal — a new run or an admin action is needed before this mapping can be posted.</>
+                              : <>Use <span className="font-bold">Approve &amp; Post</span> above to send this mapping to Oracle.</>}
+                          </p>
+                          {detail.manually_mapped_by && (
+                            <p className="text-[10px] text-emerald-600/80 mt-1.5">
+                              Mapped by {detail.manually_mapped_by}
+                              {detail.manually_mapped_at ? ` on ${fmtDate(detail.manually_mapped_at)}` : ""}.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => { setShowRemapPicker(true); fetchMappingOptions(); }}
+                        className="text-[10px] font-black uppercase tracking-wider text-gray-400 hover:text-[#1E3A5F] cursor-pointer"
+                      >
+                        Map to a different invoice instead →
+                      </button>
+                    </div>
+                  ) : mappingOptionsLoading ? (
                     <div className="flex items-center gap-2 text-gray-400 text-[12px]">
                       <Loader2 size={14} className="animate-spin" /> Loading aging report options…
                     </div>
@@ -1030,6 +1114,19 @@ export default function RowDetailPage() {
                     <p className="text-[12px] text-red-600 font-semibold">{mappingOptionsError}</p>
                   ) : mappingOptions ? (
                     <>
+                      {alreadyMapped && (
+                        <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-xs border border-amber-200 bg-amber-50">
+                          <p className="text-[11px] text-amber-800 font-semibold">
+                            Picking new invoice(s) below will replace the current mapping.
+                          </p>
+                          <button
+                            onClick={() => setShowRemapPicker(false)}
+                            className="text-[10px] font-black uppercase tracking-wider text-amber-700 hover:text-amber-900 cursor-pointer shrink-0"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
                       {!mappingOptions.customer_identified ? (
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider">Select Customer</label>
