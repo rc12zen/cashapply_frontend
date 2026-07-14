@@ -981,7 +981,41 @@ export default function RowDetailPage() {
                 CARD 2 — What was identified
             ══════════════════════════════════════════════ */}
             <CardShell>
-              <CardHead icon={<ZapIcon size={13} />} title="What was identified" />
+              <CardHead
+                icon={<ZapIcon size={13} />}
+                title="What was identified"
+                right={
+                  // PATCH: was ONLY shown inside CARD 2.5 (Manual Invoice
+                  // Mapping), which unmounts entirely once category becomes
+                  // ready_for_oracle/processed — the normal, EXPECTED
+                  // outcome of a successful manual mapping for any row that
+                  // wasn't already stuck post_failed/rejected. That made the
+                  // badge and SPOC name disappear at exactly the moment
+                  // they became true. Shown here instead, gated only on
+                  // detail.manually_mapped — persists for the row's entire
+                  // lifecycle, including after it's fully Processed.
+                  detail.manually_mapped ? (
+                    <span
+                      className="flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-100 uppercase tracking-wider px-2 py-1 rounded-xs"
+                      title={
+                        detail.manually_mapped_by
+                          ? `Mapped by ${detail.manually_mapped_by}${detail.manually_mapped_at ? ` on ${fmtDate(detail.manually_mapped_at)}` : ""}`
+                          : "Manually mapped"
+                      }
+                    >
+                      <CheckCircle2 size={10} /> Manually Mapped
+                      {detail.manually_mapped_by ? ` · ${detail.manually_mapped_by}` : ""}
+                    </span>
+                  ) : undefined
+                }
+              />
+              {detail.manually_mapped && detail.manually_mapped_at && (
+                <div className="px-5 pt-3 -mb-1">
+                  <p className="text-[10px] text-gray-400">
+                    Manually mapped by <span className="font-bold text-gray-500">{detail.manually_mapped_by || "unknown"}</span> on {fmtDate(detail.manually_mapped_at)}.
+                  </p>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
 
                 {/* Customer side */}
