@@ -321,6 +321,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         ou_number: ouNumber.trim() || undefined,
         business_unit: businessUnit.trim() || undefined,
         functional_currency: functionalCurrency.trim() || undefined,
+        source_filename: previewData?.filename,
       });
       onSaved(accountNumber.trim());
     } catch (e: any) {

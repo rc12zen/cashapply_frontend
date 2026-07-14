@@ -119,6 +119,7 @@ export interface SaveRecipePayload {
   // genuinely new (see backend's builder_save); falls back to `currency`
   // if omitted. See db config_builder_routes.py's SaveRecipeRequest.
   functional_currency?: string;
+  source_filename?: string;              // statement file the config was built from (audit log)
 }
 
 export interface AccountSummary {

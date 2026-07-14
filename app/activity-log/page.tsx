@@ -35,7 +35,6 @@ interface ActivityLogEntry {
 const PILLS = [
 	{ key: "analysis_run", label: "Analysis Run" },
 	{ key: "config_creation", label: "Configure Creation" },
-	{ key: "system", label: "System Logs" },
 	{ key: "approved", label: "Accepted" },
 	{ key: "rejected", label: "Rejected" },
 	{ key: null, label: "All Logs" },
@@ -95,7 +94,7 @@ export default function ActivityLogPage() {
 				page: pageArg,
 				pageSize,
 				category: activePill ?? undefined,
-				userEmail: activePill !== "system" && selectedUser !== "All Users" ? selectedUser : undefined,
+				userEmail: selectedUser !== "All Users" ? selectedUser : undefined,
 				dateFrom: dateFrom || undefined,
 				dateTo: dateTo || undefined,
 			});
@@ -204,22 +203,20 @@ export default function ActivityLogPage() {
 			</div>
 
 			{/* FILTER CONSOLE — user + search + timeline (no user filter on System Logs — all rows are System) */}
-			<div className={`grid grid-cols-1 ${activePill === "system" ? "sm:grid-cols-3" : "sm:grid-cols-4"} gap-3 bg-white border border-gray-200 p-4 rounded-sm shadow-2xs`}>
-				{activePill !== "system" && (
-					<div className="relative flex items-center">
-						<User size={13} className="absolute left-3 text-gray-400 pointer-events-none" />
-						<select
-							value={selectedUser}
-							onChange={(e) => setSelectedUser(e.target.value)}
-							className="w-full bg-gray-50 border border-gray-300 rounded-sm text-xs font-bold text-primary pl-9 pr-3 py-2 outline-none focus:border-[#4A90E2] cursor-pointer"
-						>
-							<option>All Users</option>
-							{userOptions.map((o) => (
-								<option key={o}>{o}</option>
-							))}
-						</select>
-					</div>
-				)}
+			<div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-white border border-gray-200 p-4 rounded-sm shadow-2xs">
+				<div className="relative flex items-center">
+					<User size={13} className="absolute left-3 text-gray-400 pointer-events-none" />
+					<select
+						value={selectedUser}
+						onChange={(e) => setSelectedUser(e.target.value)}
+						className="w-full bg-gray-50 border border-gray-300 rounded-sm text-xs font-bold text-primary pl-9 pr-3 py-2 outline-none focus:border-[#4A90E2] cursor-pointer"
+					>
+						<option>All Users</option>
+						{userOptions.map((o) => (
+							<option key={o}>{o}</option>
+						))}
+					</select>
+				</div>
 
 				<div className="relative sm:col-span-1">
 					<Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
