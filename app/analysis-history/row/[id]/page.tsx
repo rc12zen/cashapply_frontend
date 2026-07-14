@@ -37,7 +37,7 @@ import {
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
-  approveEntry, rejectEntry, retryOracle, getRowDetail,
+  approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance,
   getMappingOptions, getInvoicesForCustomer, previewManualMapping, confirmManualMapping,
 } from "@/lib/api";
 
@@ -694,6 +694,26 @@ export default function RowDetailPage() {
     setActionLoading(false);
   };
 
+  // Manual counterpart to the periodic remittance_recheck_worker — lets a
+  // SPOC re-check THIS row on demand ("the customer just told me they
+  // sent it") instead of waiting for the next scheduled sweep. Only ever
+  // does anything for a needs_remittance row; the backend itself is the
+  // real gate (see rule_engine/remittance_recheck.py), this is just the
+  // UI trigger for it.
+  const [recheckLoading, setRecheckLoading] = useState(false);
+  const handleRecheckRemittance = async () => {
+    if (!detail) return;
+    setRecheckLoading(true); setActionError("");
+    try {
+      const res = await recheckRemittance(recordId);
+      if (!res.data?.changed) {
+        setActionError(res.data?.reason || "No matching remittance found yet.");
+      }
+      await fetchDetail();
+    } catch (e: any) { setActionError(formatApiError(e, "Recheck failed.")); }
+    setRecheckLoading(false);
+  };
+
   // ── Loading / not-found ─────────────────────────────────────────────────────
 
   if (loading) return (
@@ -755,6 +775,12 @@ export default function RowDetailPage() {
   // issue) — re-attempts the exact same payload via retry_oracle_post(),
   // which server-side only proceeds if oracle_post_status is still "failed".
   const canRetry = isPostFailed;
+
+  // Recheck Remittance: only meaningful for a row still actually waiting
+  // on one (category === "needs_remittance") — the backend itself only
+  // ever acts on rule_id === "R7" rows regardless of what this shows, but
+  // hiding it otherwise avoids a button that would just always no-op.
+  const canRecheckRemittance = detail.category === "needs_remittance";
 
   const reasonConfig = getReasonConfig(ex.row_type || oracle.remittance_scenario);
 
@@ -865,6 +891,14 @@ export default function RowDetailPage() {
             <button disabled={actionLoading} onClick={handleRetry}
               className="flex items-center gap-1.5 bg-blue-500 hover:bg-blue-400 text-white px-4 py-2 text-[10px] font-black uppercase tracking-wider cursor-pointer disabled:opacity-50 transition-colors">
               <RefreshCw size={12} className={`stroke-[3] ${actionLoading ? "animate-spin" : ""}`} /> Retry Post
+            </button>
+          )}
+          {canRecheckRemittance && (
+            <button disabled={recheckLoading} onClick={handleRecheckRemittance}
+              title="Check whether a remittance has arrived since this row landed here"
+              className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-white px-4 py-2 text-[10px] font-black uppercase tracking-wider cursor-pointer disabled:opacity-50 transition-colors">
+              <Mail size={12} className={`stroke-[3] ${recheckLoading ? "animate-pulse" : ""}`} />
+              {recheckLoading ? "Checking…" : "Recheck Remittance"}
             </button>
           )}
           {canReject && (
