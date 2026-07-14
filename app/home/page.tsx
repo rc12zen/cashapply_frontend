@@ -315,7 +315,12 @@ export default function Dashboard() {
         }
       } catch {}
     })();
-  }, [fetchFiles, fetchPendingByAccount, doFetchMetrics, fetchFilterOptions, fetchAgingHistory]);
+  // Mount-only: doFetchMetrics's identity changes with the Bank/BU/User
+  // filters (see its useCallback deps), which would otherwise re-fire this
+  // effect on every filter change and race the dedicated filter effect below
+  // with a stale "Last Analysis" fetch, intermittently clobbering it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (timePeriod === "Custom Date") return;
