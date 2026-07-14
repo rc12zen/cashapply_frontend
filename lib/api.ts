@@ -263,6 +263,7 @@ export const getActivityLog = (params: {
   page?: number;
   pageSize?: number;
   userId?: number;
+  userEmail?: string;
   category?: string;
   entityType?: string;
   dateFrom?: string;
@@ -273,12 +274,16 @@ export const getActivityLog = (params: {
       page: params.page ?? 1,
       page_size: params.pageSize ?? 50,
       user_id: params.userId,
+      user_email: params.userEmail,
       category: params.category,
       entity_type: params.entityType,
       date_from: params.dateFrom,
       date_to: params.dateTo,
     },
   });
+
+// Distinct user emails present in the audit trail — for the user filter dropdown.
+export const getActivityUsers = () => API.get("/api/activity-log/users");
 
 // ── HITL ──────────────────────────────────────────────────────────────────────
 export const getPendingHitl     = ()                             => API.get("/api/hitl/pending");
