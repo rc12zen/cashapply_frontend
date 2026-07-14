@@ -73,14 +73,18 @@ export const deleteFile = (filename: string) =>
 /**
  * Uploads a bank statement. Response shape changed (backend duplicate-
  * detection integration — see design doc §2.1/§2.2):
- *   Duplicate file:   { duplicate: true, uploaded_by, uploaded_at,
+ *   Duplicate file (already ingested): { duplicate: true, uploaded_by, uploaded_at,
  *                        existing_source_file_id, existing_run_id, history_link }
+ *   Duplicate, but previously removed: { duplicate: false, restored: true,
+ *                        source_file_id, ingest_status, message }
+ *   Duplicate, but ingestion errored
+ *   before (e.g. no config existed):  { duplicate: false, retried: true,
+ *                        source_file_id, ingest_status: "processing", message }
  *   New file:          { duplicate: false, source_file_id, ingest_status: "processing",
  *                        detected_bank_config, warning, ambiguous, candidates, ... }
- * For a non-duplicate upload, the file is NOT yet parsed — poll
- * getIngestStatus(source_file_id) until ingest_status flips to "ready"
- * before offering it for analysis (row-level dedup happens in that
- * background step).
+ * For any non-`duplicate:true` response, poll getIngestStatus(source_file_id)
+ * until ingest_status flips to "ready" before offering it for analysis
+ * (row-level dedup happens in that background step).
  */
 export const uploadStatement = (file: File) => {
   const form = new FormData();

@@ -588,15 +588,35 @@ export default function Dashboard() {
       const res = await uploadStatement(file);
       const data = res.data ?? {};
 
-      if (data.restored) {
-        // PATCH: the file you just uploaded matches one that was
-        // previously removed (✕) — the backend un-archived it instead of
-        // permanently blocking it as a duplicate (which used to leave it
-        // stuck: blocked from re-upload, yet invisible in this list
+      if (data.restored || data.retried) {
+        // PATCH (restored): the file you just uploaded matches one that
+        // was previously removed (✕) — the backend un-archived it instead
+        // of permanently blocking it as a duplicate (which used to leave
+        // it stuck: blocked from re-upload, yet invisible in this list
         // either way, since that list filters out archived files).
+        //
+        // PATCH (retried): the file matches one whose ONLY prior ingestion
+        // attempt errored (typically: no config existed yet). The backend
+        // now retries instead of flatly rejecting it as a duplicate, since
+        // a config may exist now.
+        //
+        // BUGFIX: both cases used to `return` immediately after the
+        // success toast, before ever calling pollIngestStatus() below — so
+        // even though the backend actually re-runs ingest_and_parse for
+        // these files (the route defers ingest_statement_task whenever
+        // duplicate === false), the UI never reflected it finishing. The
+        // file would just sit showing its last-known ingest_status
+        // ("processing"/"error") until the user manually refreshed the
+        // page. Now polls the same as a brand-new upload.
         await fetchFiles();
         await fetchPendingByAccount();
-        showSuccess(data.message || `"${file.name}" restored to your Account Statements list.`);
+        showSuccess(
+          data.message ||
+            (data.restored
+              ? `"${file.name}" restored to your Account Statements list.`
+              : `"${file.name}" previously failed to process — retrying now.`)
+        );
+        if (data.source_file_id) pollIngestStatus(data.source_file_id, file.name);
         return;
       }
 
@@ -865,7 +885,6 @@ export default function Dashboard() {
 							</h3>
 							<p className="text-[11px] text-gray-500 leading-relaxed">
 								Auto-loaded from the Oracle SFTP (<code className="bg-gray-100 px-1 rounded text-[10px]">AGING_WATCH_FOLDER</code>).
-								Drop a new XLS/CSV file there to refresh automatically.
 							</p>
 						</div>
 						<div className="mt-3 pt-2 border-t border-gray-100 space-y-2">
