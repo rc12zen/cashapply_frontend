@@ -34,7 +34,11 @@ const LOGICAL_FIELDS: { name: LogicalField; label: string; required: boolean }[]
   { name: "account_number", label: "Account Number", required: true },
   { name: "currency",       label: "Currency",       required: true },
   { name: "bank_name",      label: "Bank Name",      required: true },
-  { name: "bank_reference", label: "Bank Reference", required: true },
+  // Optional: the bank's own transaction reference is nullable downstream and
+  // many statements don't carry it — the "Not in this file" (none) option must
+  // be a valid choice, so this can't be required (a required field can never be
+  // satisfied by "none", which would wedge the Next button — see canProceed).
+  { name: "bank_reference", label: "Bank Reference", required: false },
 ];
 
 // Strong, general account-number matcher for the regex locator. Captures any

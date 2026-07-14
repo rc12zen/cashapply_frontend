@@ -45,6 +45,18 @@ export interface AccountGroup {
 }
 
 /**
+ * A statement can only be included in a run when its account is RECOGNISED
+ * (a config matched → it has a bank_account_id) AND it actually has unconsumed
+ * rows to process. An "Unknown"/errored statement (bank_account_id === null,
+ * 0 pending rows) must not be runnable — the orchestrator consumes rows by
+ * bank_account_id, so an unresolved statement would contribute nothing and a
+ * run against only such statements is a no-op. Selection, the Start button,
+ * and the run payload all gate on this single predicate.
+ */
+export const isAccountRunnable = (g: AccountGroup): boolean =>
+  g.bank_account_id != null && g.pending_row_count > 0;
+
+/**
  * PATCH: `groups` is the new, unambiguous taxonomy — same one used by
  * compute_run_summary() (run-detail page) and _category_for_row() (HITL
  * approve gate). Legacy top-level fields are kept on the type for

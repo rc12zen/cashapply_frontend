@@ -42,7 +42,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {deleteFile,
   getAgingHistory, getAgingStatus, getFiles, getFilterOptions, getIngestStatus, getMetrics, getRunHistory,
   getPendingByAccount,
-  getStatus, selectAgingSource, startRun,
+  getStatus, reingestStatement, selectAgingSource, startRun,
   uploadStatement,
 } from "@/lib/api";
 import { detectForFile } from "@/lib/configBuilderApi";
@@ -65,7 +65,7 @@ import AmountViewCard from "./components/AmountViewCard";
 
 import {
   type ConfigCandidate, type FileInfo, type AccountGroup, type Metrics, type MetricKey,
-  METRIC_CONFIG, METRIC_GROUP_KEY,
+  METRIC_CONFIG, METRIC_GROUP_KEY, isAccountRunnable,
 } from "./types";
 
 export default function Dashboard() {
@@ -386,20 +386,37 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [runStatus.status]);
 
-  // PATCH: showSuccess() used to schedule a bare setTimeout with no way to
-  // cancel it. If a second success message came in before the first one's
-  // 4s timer fired (e.g. "Statement uploaded, processing..." immediately
-  // followed by pollIngestStatus's "ready" message once ingestion finished
-  // quickly), the FIRST timer would still fire on schedule and clear
-  // whatever message was showing — even the newer one, sometimes only a
-  // moment after it appeared. Now tracks the pending timer and cancels it
-  // before scheduling a new one, so each message reliably gets its own
-  // full 4 seconds.
-  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Success toasts are QUEUED rather than clobbering each other. Previously a
+  // new showSuccess() call immediately replaced the visible message, so when
+  // several fired in a burst (e.g. an upload's "processing" toast, then a
+  // re-ingest completing, then a detect refresh) earlier messages flashed by
+  // in a fraction of a second — unreadable. Now each message is shown for its
+  // full duration in turn, and an identical message that's already showing or
+  // queued is de-duplicated (so a repeated "…is ready…" can't spam the bar).
+  const SUCCESS_MS = 3500;
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // null = idle
+  const successQueueRef = useRef<string[]>([]);
+  const currentSuccessRef = useRef<string>("");
+
+  const advanceSuccessQueue = () => {
+    const next = successQueueRef.current.shift();
+    if (next === undefined) {
+      setSuccessMessage("");
+      currentSuccessRef.current = "";
+      successTimerRef.current = null; // idle — next showSuccess starts immediately
+      return;
+    }
+    setSuccessMessage(next);
+    currentSuccessRef.current = next;
+    successTimerRef.current = setTimeout(advanceSuccessQueue, SUCCESS_MS);
+  };
+
   const showSuccess = (msg: string) => {
-    if (successTimerRef.current) clearTimeout(successTimerRef.current);
-    setSuccessMessage(msg);
-    successTimerRef.current = setTimeout(() => setSuccessMessage(""), 4000);
+    if (!msg) return;
+    // De-dupe: skip if it's the message on screen now or already waiting.
+    if (msg === currentSuccessRef.current || successQueueRef.current.includes(msg)) return;
+    successQueueRef.current.push(msg);
+    if (successTimerRef.current === null) advanceSuccessQueue(); // idle → show now
   };
 
   // PATCH: true when the currently-listed statement files are EXACTLY the
@@ -458,13 +475,21 @@ export default function Dashboard() {
     // consumes rows by account, so this is the real unit of selection (see
     // accountGroups above). Previously every listed file was always sent,
     // regardless of any selection UI, which didn't exist at all before this.
-    const selectedFilenames = accountGroups
-      .filter((g) => isAccountSelected(g.key))
-      .flatMap((g) => g.files.map((f) => f.filename));
-    if (selectedFilenames.length === 0) {
-      setError("No accounts selected. Check at least one account below before starting analysis.");
+    // PATCH 2: also require the account to be RUNNABLE (recognised + has
+    // pending rows). An "Unknown"/errored statement would otherwise be sent
+    // and produce a no-op run — see isAccountRunnable().
+    const runnableSelected = accountGroups.filter(
+      (g) => isAccountSelected(g.key) && isAccountRunnable(g),
+    );
+    if (runnableSelected.length === 0) {
+      setError(
+        "No analyzable statements selected. A statement must be recognised (its account " +
+        "configured) and have pending rows. Configure any 'Unknown' statements from the " +
+        "Config tab first.",
+      );
       return;
     }
+    const selectedFilenames = runnableSelected.flatMap((g) => g.files.map((f) => f.filename));
     setError("");
     setRunCompletionSummary(null);
     setLoading(true);
@@ -500,6 +525,11 @@ export default function Dashboard() {
           clearInterval(interval);
           const dupNote = duplicate_row_count ? ` (${duplicate_row_count} duplicate row(s) skipped)` : "";
           showSuccess(`"${filename}" is ready — ${new_row_count ?? 0} new row(s) ingested${dupNote}.`);
+          // Re-fetch the authoritative file list too: ingestion sets the file's
+          // bank_account_id (null until now), so without this the file stays in
+          // the "unresolved"/Unknown group even though it's ready. fetchFiles
+          // regroups it under its real account so it becomes selectable/runnable.
+          fetchFiles();
           fetchPendingByAccount();
         } else if (ingest_status === "error") {
           clearInterval(interval);
@@ -774,7 +804,21 @@ export default function Dashboard() {
 								...prev,
 								[fn]: { config_key: configKey, warning: null, ambiguous: false },
 							}));
-							showSuccess(`Config '${configKey}' saved! Re-upload the file to use the new config.`);
+							// The file was already uploaded (and failed ingest as UNKNOWN).
+							// Now that its config exists, re-ingest it IN PLACE so it parses
+							// rows + links its account + flips to ready — a plain re-upload
+							// would be blocked as a duplicate and do nothing.
+							const sf = files.find((f) => f.filename === fn);
+							if (sf?.source_file_id) {
+								reingestStatement(sf.source_file_id)
+									.then(() => {
+										showSuccess(`Config '${configKey}' saved — re-processing "${fn}"…`);
+										pollIngestStatus(sf.source_file_id!, fn);
+									})
+									.catch(() => showSuccess(`Config '${configKey}' saved. Re-upload the file to process it.`));
+							} else {
+								showSuccess(`Config '${configKey}' saved.`);
+							}
 						}}
 					/>
 				)}

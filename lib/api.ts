@@ -111,6 +111,14 @@ export const uploadStatement = (file: File) => {
 export const getIngestStatus = (sourceFileId: number) =>
   API.get(`/api/run/files/${sourceFileId}/ingest-status`);
 
+/**
+ * Re-run ingestion for an already-uploaded statement in place — used after a
+ * config is created for a previously-UNKNOWN file via the Home "Configure"
+ * flow (a plain re-upload would be blocked as a duplicate and not re-parse).
+ */
+export const reingestStatement = (sourceFileId: number) =>
+  API.post(`/api/run/files/${sourceFileId}/reingest`);
+
 export const uploadAgingReport = (file: File) => {
   const form = new FormData();
   form.append("file", file);
