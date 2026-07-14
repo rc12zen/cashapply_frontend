@@ -313,9 +313,14 @@ export default function Dashboard() {
       const buFilter   = selectedBU   !== "All BUs"   ? selectedBU   : undefined;
       const userFilter = selectedUser !== "All Users" ? selectedUser : undefined;
 
+      // Each call catches independently: these panels are unrelated, so a
+      // failure in one (e.g. a 500 from /metrics) must NOT blank the others.
+      // Previously a bare Promise.all meant one rejecting call aborted the
+      // whole block before setAgingStatus ran — a healthy aging report then
+      // showed as "Not Loaded" purely because /metrics happened to be down.
       const [m, a, ai, aiT] = await Promise.all([
-        getMetrics(runId, dateFrom, dateTo, bankFilter, buFilter, userFilter),
-        getAgingStatus(),
+        getMetrics(runId, dateFrom, dateTo, bankFilter, buFilter, userFilter).catch(() => ({ data: null })),
+        getAgingStatus().catch(() => ({ data: null })),
         // AI Run Details panel — scoped to the same run/date period as the
         // rest of the dashboard: "Last Analysis" => runId, any date pill =>
         // dateFrom/dateTo. (AI usage is tagged by run/time only, so the
@@ -324,8 +329,8 @@ export default function Dashboard() {
         // Global all-time / this-month totals — independent of the scope above.
         getAiUsageTotals().catch(() => ({ data: null })),
       ]);
-      setMetrics(m.data);
-      setAgingStatus(a.data);
+      if (m.data)   setMetrics(m.data);
+      if (a.data)   setAgingStatus(a.data);
       setAiUsage(ai.data);
       setAiTotals(aiT.data);
       setAiScope({ runId, dateFrom, dateTo });
