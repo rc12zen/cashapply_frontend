@@ -44,10 +44,11 @@ import {
   FileText, HelpCircle, Landmark, Layers, Loader2, PieChart as PieIcon, Play,
   RefreshCw, Settings, Sparkles, UploadCloud, User, X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import {deleteFile,
   getAgingHistory, getAgingStatus, getFiles, getFilterOptions, getIngestStatus, getMetrics, getRunHistory,
+  getPendingByAccount,
   getStatus, selectAgingSource, startRun,
   uploadStatement,
 } from "@/lib/api";
@@ -73,11 +74,30 @@ interface FileInfo {
   size_mb:       number;
   business_unit: string;
   ou_number:     string;
+  bank_account_id?: number | null;
   // ── Duplicate detection / ingestion status (additive) ────────────────────
   source_file_id?:      number;
   ingest_status?:       "processing" | "ready" | "error" | null;
   new_row_count?:        number | null;
   duplicate_row_count?:  number | null;
+}
+
+/**
+ * PATCH: account-level "include in next run" selection. The orchestrator
+ * consumes unconsumed rows by bank_account_id, not by file (see
+ * rule_engine/orchestrator.py) — a file-level checkbox would silently not
+ * match that behavior whenever two files share an account, so selection
+ * happens at the account level to match reality.
+ */
+interface AccountGroup {
+  key: string;                 // String(bank_account_id) or "unresolved"
+  bank_account_id: number | null;
+  account_number: string | null;
+  bank_name: string;
+  business_unit: string;
+  ou_number: string;
+  files: FileInfo[];
+  pending_row_count: number;
 }
 
 /**
@@ -98,7 +118,10 @@ interface Metrics {
     rejected:           number;
     post_failed:        number;
   };
-  // Amount view — same 7 buckets, values are INR-equivalent totals
+  // Amount view — same 7 buckets, values are USD-equivalent totals
+  // (each row converted from ITS OWN functional/ledger currency into USD —
+  // see bff/metrics.py's _to_usd(). Was labeled INR before, which was wrong
+  // the moment any row belonged to a non-Indian OU's functional currency.)
   group_amounts?: {
     unidentified:       number;
     needs_remittance:   number;
@@ -108,7 +131,7 @@ interface Metrics {
     rejected:           number;
     post_failed:        number;
   };
-  total_inr_amount?: number;
+  total_usd_amount?: number;
   // PATCH: identified count for the "Identified" KPI card — every row with
   // SOME signal found (i.e. not in the unidentified bucket). Mirrors
   // total_identified on the Analysis History run-list table.
@@ -149,6 +172,16 @@ const METRIC_GROUP_KEY: Record<keyof typeof METRIC_CONFIG, keyof Metrics["groups
 
 export default function Dashboard() {
   const [files, setFiles]             = useState<FileInfo[]>([]);
+  // PATCH: account-level pending counts + which accounts are checked to be
+  // included in the next run. Keyed by String(bank_account_id), or
+  // "unresolved" for files whose account couldn't be determined at ingest.
+  const [pendingByAccount, setPendingByAccount] = useState<Record<string, { account_number: string | null; bank_name: string; pending_row_count: number }>>({});
+  // PATCH: tracks accounts the user has explicitly UNCHECKED (opt-out model).
+  // Anything not in this set is included by default — including an account
+  // that's never been seen before (e.g. just uploaded) — without needing to
+  // separately track "have we seen this key already" to tell "new account"
+  // apart from "user unchecked this one earlier".
+  const [deselectedAccountKeys, setDeselectedAccountKeys] = useState<Set<string>>(new Set());
   const [runStatus, setRunStatus]     = useState({ status: "idle", message: "", progress_current: 0, started_at: null as string | null });
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const runStartedLocalRef = useRef<number | null>(null); // wall-clock ms when THIS browser session first saw "running"
@@ -169,10 +202,15 @@ export default function Dashboard() {
 
   // ── Duplicate-upload banner (backend design doc §2.1) ──────────────────────
   // Set when uploadStatement() returns { duplicate: true, ... } — surfaced as
-  // a dismissable, actionable banner (not a toast) since the point is the
-  // user needs to go look at the existing run, not just be told.
+  // a dismissable, actionable banner (not a toast).
+  // PATCH: added existing_run_id — the backend correctly returns null here
+  // when the file was uploaded but never analyzed (see
+  // ingestion/file_hash.py's check_duplicate_file), but the banner used to
+  // always say "View existing run →" regardless, which is misleading when
+  // there's no run to view. Now branches on whether one actually exists.
   const [duplicateUploadInfo, setDuplicateUploadInfo] = useState<{
-    filename: string; uploaded_by: string; uploaded_at: string | null; history_link: string;
+    filename: string; uploaded_by: string; uploaded_at: string | null;
+    history_link: string; existing_run_id: number | null;
   } | null>(null);
 
   // Detection results per file + wizard/resolve state
@@ -224,6 +262,23 @@ export default function Dashboard() {
       setFiles(res.data.files);
     } catch {
       setError("Could not connect to backend system.");
+    }
+  }, []);
+
+  const fetchPendingByAccount = useCallback(async () => {
+    try {
+      const res = await getPendingByAccount();
+      const accounts: any[] = res.data.accounts || [];
+      const byKey: Record<string, { account_number: string | null; bank_name: string; pending_row_count: number }> = {};
+      accounts.forEach((a) => {
+        const key = a.bank_account_id != null ? String(a.bank_account_id) : "unresolved";
+        byKey[key] = { account_number: a.account_number, bank_name: a.bank_name, pending_row_count: a.pending_row_count };
+      });
+      setPendingByAccount(byKey);
+      // Nothing else to do here — deselectedAccountKeys is opt-out, so any
+      // account not explicitly unchecked (new or old) stays included.
+    } catch {
+      // non-fatal — falls back to "everything included" behavior below
     }
   }, []);
 
@@ -345,6 +400,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchFiles();
+    fetchPendingByAccount();
     doFetchMetrics("Last Analysis", "", "");
     fetchFilterOptions();
     fetchAgingHistory();
@@ -361,7 +417,7 @@ export default function Dashboard() {
         }
       } catch {}
     })();
-  }, [fetchFiles, doFetchMetrics, fetchFilterOptions, fetchAgingHistory]);
+  }, [fetchFiles, fetchPendingByAccount, doFetchMetrics, fetchFilterOptions, fetchAgingHistory]);
 
   useEffect(() => {
     if (timePeriod === "Custom Date") return;
@@ -399,9 +455,20 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [runStatus.status]);
 
+  // PATCH: showSuccess() used to schedule a bare setTimeout with no way to
+  // cancel it. If a second success message came in before the first one's
+  // 4s timer fired (e.g. "Statement uploaded, processing..." immediately
+  // followed by pollIngestStatus's "ready" message once ingestion finished
+  // quickly), the FIRST timer would still fire on schedule and clear
+  // whatever message was showing — even the newer one, sometimes only a
+  // moment after it appeared. Now tracks the pending timer and cancels it
+  // before scheduling a new one, so each message reliably gets its own
+  // full 4 seconds.
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showSuccess = (msg: string) => {
+    if (successTimerRef.current) clearTimeout(successTimerRef.current);
     setSuccessMessage(msg);
-    setTimeout(() => setSuccessMessage(""), 4000);
+    successTimerRef.current = setTimeout(() => setSuccessMessage(""), 4000);
   };
 
   // PATCH: true when the currently-listed statement files are EXACTLY the
@@ -409,6 +476,40 @@ export default function Dashboard() {
   // already processed — i.e. nothing new has been uploaded since. Drives
   // the control bar so it doesn't say "Ready for analysis" (implying a
   // fresh, useful run) right after a completed run against the same files.
+  // PATCH: group `files` by bank_account_id for the account-level checkbox
+  // UI — the orchestrator consumes rows by account, not by file, so
+  // selection has to happen at this granularity to match real behavior.
+  const accountGroups: AccountGroup[] = useMemo(() => {
+    const map = new Map<string, AccountGroup>();
+    for (const f of files) {
+      const key = f.bank_account_id != null ? String(f.bank_account_id) : "unresolved";
+      if (!map.has(key)) {
+        const meta = pendingByAccount[key];
+        map.set(key, {
+          key,
+          bank_account_id: f.bank_account_id ?? null,
+          account_number: meta?.account_number ?? null,
+          bank_name: meta?.bank_name || f.bank_name,
+          business_unit: f.business_unit,
+          ou_number: f.ou_number,
+          files: [],
+          pending_row_count: meta?.pending_row_count ?? 0,
+        });
+      }
+      map.get(key)!.files.push(f);
+    }
+    return Array.from(map.values());
+  }, [files, pendingByAccount]);
+
+  const isAccountSelected = (key: string) => !deselectedAccountKeys.has(key);
+  const toggleAccountSelected = (key: string) => {
+    setDeselectedAccountKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
   const filesAlreadyAnalyzed =
     files.length > 0 &&
     lastRunFiles.length === files.length &&
@@ -422,11 +523,22 @@ export default function Dashboard() {
       setError("These statement(s) were already analyzed. Upload a new statement to run again.");
       return;
     }
+    // PATCH: only include files whose ACCOUNT is checked — the orchestrator
+    // consumes rows by account, so this is the real unit of selection (see
+    // accountGroups above). Previously every listed file was always sent,
+    // regardless of any selection UI, which didn't exist at all before this.
+    const selectedFilenames = accountGroups
+      .filter((g) => isAccountSelected(g.key))
+      .flatMap((g) => g.files.map((f) => f.filename));
+    if (selectedFilenames.length === 0) {
+      setError("No accounts selected. Check at least one account below before starting analysis.");
+      return;
+    }
     setError("");
     setRunCompletionSummary(null);
     setLoading(true);
     try {
-      await startRun(files.map((f) => f.filename));
+      await startRun(selectedFilenames);
       prevRunStatus.current = "running";
       fetchStatus();
     } catch (e: any) {
@@ -457,6 +569,7 @@ export default function Dashboard() {
           clearInterval(interval);
           const dupNote = duplicate_row_count ? ` (${duplicate_row_count} duplicate row(s) skipped)` : "";
           showSuccess(`"${filename}" is ready — ${new_row_count ?? 0} new row(s) ingested${dupNote}.`);
+          fetchPendingByAccount();
         } else if (ingest_status === "error") {
           clearInterval(interval);
           setError(ingest_error || `Failed to process "${filename}".`);
@@ -475,15 +588,40 @@ export default function Dashboard() {
       const res = await uploadStatement(file);
       const data = res.data ?? {};
 
+      if (data.restored) {
+        // PATCH: the file you just uploaded matches one that was
+        // previously removed (✕) — the backend un-archived it instead of
+        // permanently blocking it as a duplicate (which used to leave it
+        // stuck: blocked from re-upload, yet invisible in this list
+        // either way, since that list filters out archived files).
+        await fetchFiles();
+        await fetchPendingByAccount();
+        showSuccess(data.message || `"${file.name}" restored to your Account Statements list.`);
+        return;
+      }
+
       if (data.duplicate) {
         // Exact-duplicate-file case (backend design doc §2.1) — not an
-        // error toast, an actionable banner with a link to the existing run.
+        // error toast, an actionable banner. existing_run_id tells us
+        // whether there's actually a run to link to.
+        //
+        // FIX: this used to `return` here, BEFORE the fetchFiles() /
+        // fetchPendingByAccount() calls below — so even though the banner
+        // correctly says "it's still sitting in your Account Statements
+        // list below," that list was never actually refreshed, and could
+        // show empty/stale if this was the first action taken since page
+        // load. Now falls through to the same refresh every other path
+        // does, just skips the detection-info/ambiguous-config handling
+        // below (nothing new was actually parsed).
         setDuplicateUploadInfo({
           filename: file.name,
           uploaded_by: data.uploaded_by,
           uploaded_at: data.uploaded_at,
           history_link: data.history_link,
+          existing_run_id: data.existing_run_id ?? null,
         });
+        await fetchFiles();
+        await fetchPendingByAccount();
         return;
       }
 
@@ -493,6 +631,7 @@ export default function Dashboard() {
         [file.name]: { config_key: detected_bank_config ?? null, warning: warning ?? null, ambiguous: !!ambiguous },
       }));
       await fetchFiles();
+      await fetchPendingByAccount();
       await fetchFilterOptions();
       if (ambiguous) {
         setResolveState({ filename: file.name, candidates: candidates ?? [], mode: "ambiguous" });
@@ -531,6 +670,7 @@ export default function Dashboard() {
     try {
       await deleteFile(filename);
       await fetchFiles();
+      await fetchPendingByAccount();
       showSuccess(`"${filename}" removed from the next run.`);
     } catch (e: any) {
       setError(
@@ -570,7 +710,7 @@ export default function Dashboard() {
   // Amount view helpers
   const EMPTY_GA = { unidentified: 0, needs_remittance: 0, ready_for_oracle: 0, conflict_exception: 0, processed: 0, rejected: 0, post_failed: 0 };
   const ga = metrics?.group_amounts ?? EMPTY_GA;
-  const fmtInr = (n: number) => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtUsd = (n: number) => "$" + Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtElapsed = (s: number) => `${Math.floor(s / 60).toString().padStart(2,"0")}:${(s % 60).toString().padStart(2,"0")}`;
   const getAmountPieData = () =>
     (Object.keys(METRIC_CONFIG) as Array<keyof typeof METRIC_CONFIG>)
@@ -626,9 +766,17 @@ export default function Dashboard() {
 									<> on {new Date(duplicateUploadInfo.uploaded_at).toLocaleString()}</>
 								)}
 								. No new upload was processed.{" "}
-								<a href={duplicateUploadInfo.history_link} className="underline font-bold text-amber-700 hover:text-amber-900">
-									View existing run →
-								</a>
+								{duplicateUploadInfo.existing_run_id ? (
+									<a href={duplicateUploadInfo.history_link} className="underline font-bold text-amber-700 hover:text-amber-900">
+										View existing run →
+									</a>
+								) : (
+									<>
+										This file hasn't been analyzed yet — no run exists for it. It's still sitting
+										in your Account Statements list below; select it and click{" "}
+										<span className="font-bold">Start Analysis</span> to process it.
+									</>
+								)}
 							</span>
 						</div>
 						<button
@@ -648,7 +796,7 @@ export default function Dashboard() {
 							<span className="font-medium">{successMessage}</span>
 						</div>
 						<button
-							onClick={() => setSuccessMessage("")}
+							onClick={() => { if (successTimerRef.current) clearTimeout(successTimerRef.current); setSuccessMessage(""); }}
 							className="text-gray-400 hover:text-gray-600 px-2"
 						>
 							×
@@ -791,63 +939,87 @@ export default function Dashboard() {
 								<span>{statementUploading ? "Uploading…" : "Upload From Local"}</span>
 							</button>
 						</div>
-						{files.length > 0 ? (
-							<div className="mt-3 pt-2 border-t border-gray-100 space-y-1.5 max-h-[160px] overflow-y-auto">
-								{files.map((f) => {
-									const det = detectionInfo[f.filename];
-									const isAmbiguous = !!det?.ambiguous;
-									const isUnknown = det ? (!det.config_key && !isAmbiguous) : false;
+						{accountGroups.length > 0 ? (
+							<div className="mt-3 pt-2 border-t border-gray-100 space-y-2.5 max-h-[220px] overflow-y-auto">
+								{accountGroups.map((g) => {
+									const selected = isAccountSelected(g.key);
 									return (
-										<div
-											key={f.filename}
-											className={`flex items-center justify-between text-[11px] border rounded-xs px-2 py-1.5 gap-2 ${
-												isUnknown || isAmbiguous ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"
-											}`}
-										>
-											<div className="flex items-center gap-1.5 min-w-0">
-												<FileText size={11} className="text-gray-400 shrink-0" />
-												<span className="font-mono font-bold text-primary truncate text-[10px]">{f.filename}</span>
-												{det?.config_key ? (
-													<span className="shrink-0 text-[9px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-xs">{det.config_key}</span>
-												) : isUnknown ? (
-													<span className="shrink-0 text-[9px] font-black uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs">Unknown</span>
-												) : (
-													<span className="text-gray-400 shrink-0 text-[10px]">{f.bank_name} · {f.size_mb}MB</span>
-												)}
-											</div>
-											<div className="flex items-center gap-1.5 shrink-0">
-												{f.ingest_status === "processing" ? (
-													<span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded-xs" title="Parsing and deduplicating rows in the background">
-														<Loader2 size={9} className="animate-spin" /> Processing
-													</span>
-												) : f.ingest_status === "ready" ? (
-													<span
-														className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-xs"
-														title={`${f.new_row_count ?? 0} new row(s)${f.duplicate_row_count ? `, ${f.duplicate_row_count} duplicate(s) skipped` : ""}`}
-													>
-														<CheckCircle2 size={9} /> Ready ({f.new_row_count ?? 0} new)
-													</span>
-												) : f.ingest_status === "error" ? (
-													<span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-xs" title="Ingestion failed — see server logs">
-														<AlertTriangle size={9} /> Error
-													</span>
-												) : null}
-												{isAmbiguous ? (
-													<button onClick={() => openResolveForFile(f.filename, "ambiguous")} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title="Multiple configs match — choose one">
-														<Settings size={10} /> Choose
-													</button>
-												) : isUnknown ? (
-													<button onClick={() => setWizardFile(f.filename)} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title="Open Config Builder">
-														<Settings size={10} /> Configure
-													</button>
-												) : null}
-												<button
-													onClick={() => handleRemoveFile(f.filename)}
-													className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer shrink-0"
-													title="Remove from next run (file kept in storage)"
-												>
-													<X size={11} />
-												</button>
+										<div key={g.key} className={`border rounded-xs ${selected ? "border-gray-200" : "border-gray-200 opacity-50"}`}>
+											<label className="flex items-center gap-2 px-2 py-1.5 bg-gray-50/80 border-b border-gray-100 cursor-pointer select-none">
+												<input
+													type="checkbox"
+													checked={selected}
+													onChange={() => toggleAccountSelected(g.key)}
+													className="cursor-pointer"
+												/>
+												<Landmark size={11} className="text-gray-400 shrink-0" />
+												<span className="text-[10px] font-black text-primary uppercase tracking-wide truncate">
+													{g.bank_name}{g.account_number ? ` · ${g.account_number}` : ""}
+												</span>
+												<span className="ml-auto shrink-0 text-[9px] font-bold uppercase tracking-wide text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-xs">
+													{g.pending_row_count.toLocaleString()} pending row{g.pending_row_count === 1 ? "" : "s"}
+												</span>
+											</label>
+											<div className="space-y-1.5 p-1.5">
+												{g.files.map((f) => {
+													const det = detectionInfo[f.filename];
+													const isAmbiguous = !!det?.ambiguous;
+													const isUnknown = det ? (!det.config_key && !isAmbiguous) : false;
+													return (
+														<div
+															key={f.filename}
+															className={`flex items-center justify-between text-[11px] border rounded-xs px-2 py-1.5 gap-2 ${
+																isUnknown || isAmbiguous ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"
+															}`}
+														>
+															<div className="flex items-center gap-1.5 min-w-0">
+																<FileText size={11} className="text-gray-400 shrink-0" />
+																<span className="font-mono font-bold text-primary truncate text-[10px]">{f.filename}</span>
+																{det?.config_key ? (
+																	<span className="shrink-0 text-[9px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-xs">{det.config_key}</span>
+																) : isUnknown ? (
+																	<span className="shrink-0 text-[9px] font-black uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs">Unknown</span>
+																) : (
+																	<span className="text-gray-400 shrink-0 text-[10px]">{f.bank_name} · {f.size_mb}MB</span>
+																)}
+															</div>
+															<div className="flex items-center gap-1.5 shrink-0">
+																{f.ingest_status === "processing" ? (
+																	<span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded-xs" title="Parsing and deduplicating rows in the background">
+																		<Loader2 size={9} className="animate-spin" /> Processing
+																	</span>
+																) : f.ingest_status === "ready" ? (
+																	<span
+																		className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-xs"
+																		title={`${f.new_row_count ?? 0} new row(s)${f.duplicate_row_count ? `, ${f.duplicate_row_count} duplicate(s) skipped` : ""}`}
+																	>
+																		<CheckCircle2 size={9} /> Ready ({f.new_row_count ?? 0} new)
+																	</span>
+																) : f.ingest_status === "error" ? (
+																	<span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-xs" title="Ingestion failed — see server logs">
+																		<AlertTriangle size={9} /> Error
+																	</span>
+																) : null}
+																{isAmbiguous ? (
+																	<button onClick={() => openResolveForFile(f.filename, "ambiguous")} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title="Multiple configs match — choose one">
+																		<Settings size={10} /> Choose
+																	</button>
+																) : isUnknown ? (
+																	<button onClick={() => setWizardFile(f.filename)} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title="Open Config Builder">
+																		<Settings size={10} /> Configure
+																	</button>
+																) : null}
+																<button
+																	onClick={() => handleRemoveFile(f.filename)}
+																	className="text-gray-400 hover:text-red-500 transition-colors cursor-pointer shrink-0"
+																	title="Remove from next run (file kept in storage)"
+																>
+																	<X size={11} />
+																</button>
+															</div>
+														</div>
+													);
+												})}
 											</div>
 										</div>
 									);
@@ -907,9 +1079,15 @@ export default function Dashboard() {
 									</p>
 								</div>
 							) : agingStatus.loaded && files.length > 0 ? (
-								<span className="font-bold text-sm tracking-wide text-white">
-									Ready for analysis
-								</span>
+								<div>
+									<span className="font-bold text-sm tracking-wide text-white">
+										Ready for analysis
+									</span>
+									<p className="text-[10px] text-blue-100 mt-0.5">
+										{accountGroups.filter((g) => isAccountSelected(g.key)).length} of {accountGroups.length} account{accountGroups.length === 1 ? "" : "s"} selected —
+										uncheck any you don't want included in this run.
+									</p>
+								</div>
 							) : (
 								<span className="text-gray-500">
 									File Upload Pending
@@ -921,7 +1099,8 @@ export default function Dashboard() {
 					<button
 						onClick={handleStart}
 						disabled={
-							isRunning || loading || files.length === 0 || !agingStatus.loaded || filesAlreadyAnalyzed
+							isRunning || loading || files.length === 0 || !agingStatus.loaded || filesAlreadyAnalyzed ||
+							accountGroups.filter((g) => isAccountSelected(g.key)).length === 0
 						}
 						className={`w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 font-bold text-xs uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-xs whitespace-nowrap cursor-pointer
       ${
@@ -1144,7 +1323,7 @@ export default function Dashboard() {
 						</h4>
 						<div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
 							{[
-								{ icon: <ClipboardCheck size={12} className="text-emerald-600" />, label: "Posted to Oracle", value: g.processed ?? 0, sub: "Successfully posted to Fusion AR", accent: "#1E3A5F" },
+								{ icon: <ClipboardCheck size={12} className="text-emerald-600" />, label: "Invoice Mapped", value: g.processed ?? 0, sub: "Approved and invoice-mapped in Oracle AR", accent: "#1E3A5F" },
 							].map(({ icon, label, value, sub, accent }) => (
 								<div key={label} className="border border-gray-200 rounded-sm bg-white shadow-xs overflow-hidden">
 									<div className="h-0.5" style={{ backgroundColor: accent }} />
@@ -1365,21 +1544,21 @@ export default function Dashboard() {
 					</div>
 				</div>
 
-				{/* AMOUNT VIEW — INR */}
+				{/* AMOUNT VIEW — USD */}
 				<div className="bg-white border border-gray-200 p-6 shadow-xs space-y-6">
 					<div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-gray-100">
 						<div>
 							<h2 className="text-xs font-black text-primary uppercase tracking-wider">
 								Amount View{" "}
-								<span className="ml-2 text-[10px] font-bold bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-xs">INR</span>
+								<span className="ml-2 text-[10px] font-bold bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-xs">USD</span>
 							</h2>
 							<p className="text-[11px] text-gray-500 mt-0.5">
-								Total credited amounts converted to INR .
+								Total credited amounts converted to USD.
 							</p>
 						</div>
 						<div className="text-right shrink-0">
 							<div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Total</div>
-							<div className="text-lg font-black text-primary">{fmtInr(metrics?.total_inr_amount ?? 0)}</div>
+							<div className="text-lg font-black text-primary">{fmtUsd(metrics?.total_usd_amount ?? 0)}</div>
 						</div>
 					</div>
 
@@ -1392,13 +1571,13 @@ export default function Dashboard() {
 							</h4>
 							<div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
 								{[
-									{ icon: <Layers size={12} className="text-[#1E3A5F]" />, label: "Total Amount Ingested", value: metrics?.total_inr_amount ?? 0, sub: "All credited amounts, converted to INR", accent: "#1E3A5F" },
+									{ icon: <Layers size={12} className="text-[#1E3A5F]" />, label: "Total Amount Ingested", value: metrics?.total_usd_amount ?? 0, sub: "All credited amounts, converted to USD", accent: "#1E3A5F" },
 								].map(({ icon, label, value, sub, accent }) => (
 									<div key={label} className="border border-gray-200 rounded-sm bg-white shadow-xs overflow-hidden">
 										<div className="h-0.5" style={{ backgroundColor: accent }} />
 										<div className="p-4">
 											<div className="flex items-center gap-1.5 text-gray-400 mb-2">{icon}<span className="text-[10px] font-bold uppercase tracking-wider">{label}</span></div>
-											<div className="text-lg font-black text-primary">{fmtInr(value)}</div>
+											<div className="text-lg font-black text-primary">{fmtUsd(value)}</div>
 											<div className="mt-1.5 text-[10px] text-gray-400 font-medium">{sub}</div>
 										</div>
 									</div>
@@ -1413,7 +1592,7 @@ export default function Dashboard() {
 							</h4>
 							<div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
 								{[
-									{ icon: <Sparkles   size={12} className="text-emerald-500" />, label: "Identified Matches",         value: Math.max((metrics?.total_inr_amount ?? 0) - (ga.unidentified ?? 0), 0), sub: "Customer name or invoice number found",       accent: "#10b981" },
+									{ icon: <Sparkles   size={12} className="text-emerald-500" />, label: "Identified Matches",         value: Math.max((metrics?.total_usd_amount ?? 0) - (ga.unidentified ?? 0), 0), sub: "Customer name or invoice number found",       accent: "#10b981" },
 									{ icon: <HelpCircle size={12} className="text-red-400"     />, label: "Unidentified (Blocked)",     value: ga.unidentified,     sub: "No matching customer name or invoice number", accent: "#e11d48" },
 									{ icon: <Calendar   size={12} className="text-amber-500"   />, label: "Needs Remittance Follow-Up", value: ga.needs_remittance, sub: "Variance: amount, date, invoice mapping, etc", accent: "#f59e0b" },
 									{ icon: <Sparkles   size={12} className="text-emerald-500" />, label: "Ready for Approval",         value: ga.ready_for_oracle, sub: "Exact match, one-click post to Oracle",       accent: "#10b981" },
@@ -1422,7 +1601,7 @@ export default function Dashboard() {
 										<div className="h-0.5" style={{ backgroundColor: accent }} />
 										<div className="p-3.5">
 											<div className="flex items-center gap-1.5 text-gray-400 mb-2">{icon}<span className="text-[9px] font-bold uppercase tracking-wider">{label}</span></div>
-											<div className="text-sm font-black text-primary leading-tight">{fmtInr(value)}</div>
+											<div className="text-sm font-black text-primary leading-tight">{fmtUsd(value)}</div>
 											<div className="mt-1 text-[10px] text-gray-400 font-medium">{sub}</div>
 										</div>
 									</div>
@@ -1445,7 +1624,7 @@ export default function Dashboard() {
 										<div className="h-0.5" style={{ backgroundColor: accent }} />
 										<div className="p-3.5">
 											<div className="flex items-center gap-1.5 text-gray-400 mb-2">{icon}<span className="text-[9px] font-bold uppercase tracking-wider">{label}</span></div>
-											<div className="text-sm font-black text-primary leading-tight">{fmtInr(value)}</div>
+											<div className="text-sm font-black text-primary leading-tight">{fmtUsd(value)}</div>
 											<div className="mt-1 text-[10px] text-gray-400 font-medium">{sub}</div>
 										</div>
 									</div>
@@ -1460,13 +1639,13 @@ export default function Dashboard() {
 							</h4>
 							<div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
 								{[
-									{ icon: <ClipboardCheck size={12} className="text-emerald-600" />, label: "Posted to Oracle", value: ga.processed, sub: "Successfully posted to Fusion AR", accent: "#1E3A5F" },
+									{ icon: <ClipboardCheck size={12} className="text-emerald-600" />, label: "Invoice Mapped", value: ga.processed, sub: "Approved and invoice-mapped in Oracle AR", accent: "#1E3A5F" },
 								].map(({ icon, label, value, sub, accent }) => (
 									<div key={label} className="border border-gray-200 rounded-sm bg-white shadow-xs overflow-hidden">
 										<div className="h-0.5" style={{ backgroundColor: accent }} />
 										<div className="p-4">
 											<div className="flex items-center gap-1.5 text-gray-400 mb-2">{icon}<span className="text-[10px] font-bold uppercase tracking-wider">{label}</span></div>
-											<div className="text-lg font-black text-primary">{fmtInr(value)}</div>
+											<div className="text-lg font-black text-primary">{fmtUsd(value)}</div>
 											<div className="mt-1.5 text-[10px] text-gray-400 font-medium">{sub}</div>
 										</div>
 									</div>
@@ -1500,7 +1679,7 @@ export default function Dashboard() {
 											<span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: active ? cfg.color : "#d1d5db" }} />
 											<span>{cfg.name}</span>
 											<span className={`px-1.5 py-0.5 text-[10px] rounded-full font-bold ${active ? "text-white" : "bg-gray-100 text-gray-400"}`} style={{ backgroundColor: active ? cfg.color : "" }}>
-												{fmtInr(val)}
+												{fmtUsd(val)}
 											</span>
 										</button>
 									);
@@ -1510,7 +1689,7 @@ export default function Dashboard() {
 						<div className="lg:col-span-7 border border-gray-200 p-5 rounded-sm bg-gray-50/10 flex flex-col items-center justify-center min-h-[340px]">
 							<div className="w-full text-left mb-4 flex items-center gap-2">
 								<PieIcon size={14} className="text-accent" />
-								<span className="text-xs font-bold text-primary uppercase tracking-wider">Amount Distribution (INR)</span>
+								<span className="text-xs font-bold text-primary uppercase tracking-wider">Amount Distribution (USD)</span>
 							</div>
 							{amountPieData.length > 0 ? (
 								<div className="w-full h-[240px]">
@@ -1520,7 +1699,7 @@ export default function Dashboard() {
 												{amountPieData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
 											</Pie>
 											<Tooltip
-												formatter={(value: number) => fmtInr(value)}
+												formatter={(value: number) => fmtUsd(value)}
 												contentStyle={{ backgroundColor: "#1E3A5F", borderColor: "#172e4c", borderRadius: "2px" }}
 												itemStyle={{ color: "#fff", fontSize: "12px" }}
 											/>

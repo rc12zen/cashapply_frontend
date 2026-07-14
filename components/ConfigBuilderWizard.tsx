@@ -130,6 +130,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const [currency, setCurrency]           = useState("");
   const [ouNumber, setOuNumber]           = useState("");
   const [businessUnit, setBusinessUnit]   = useState("");
+  const [functionalCurrency, setFunctionalCurrency] = useState("");
   const [saving, setSaving]               = useState(false);
   const [saveError, setSaveError]         = useState("");
 
@@ -319,6 +320,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         currency: currency.trim() || undefined,
         ou_number: ouNumber.trim() || undefined,
         business_unit: businessUnit.trim() || undefined,
+        functional_currency: functionalCurrency.trim() || undefined,
       });
       onSaved(accountNumber.trim());
     } catch (e: any) {
@@ -538,6 +540,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   displayName, setDisplayName,
                   bank, setBank, currency, setCurrency,
                   ouNumber, setOuNumber, businessUnit, setBusinessUnit,
+                  functionalCurrency, setFunctionalCurrency,
                   accountNumber, existingFormats,
                   extension: previewData?.extension ?? "xlsx",
                   saving, saveError,
@@ -1612,6 +1615,7 @@ function StepSave({
   displayName, setDisplayName,
   bank, setBank, currency, setCurrency,
   ouNumber, setOuNumber, businessUnit, setBusinessUnit,
+  functionalCurrency, setFunctionalCurrency,
   accountNumber, existingFormats,
   extension,
   saving, saveError,
@@ -1621,6 +1625,7 @@ function StepSave({
   currency: string; setCurrency: (v: string) => void;
   ouNumber: string; setOuNumber: (v: string) => void;
   businessUnit: string; setBusinessUnit: (v: string) => void;
+  functionalCurrency: string; setFunctionalCurrency: (v: string) => void;
   accountNumber: string;
   existingFormats: Record<string, string[]>;
   extension: string;
@@ -1671,10 +1676,17 @@ function StepSave({
           <input type="text" placeholder="e.g. SoCal BU" value={businessUnit} onChange={(e) => setBusinessUnit(e.target.value)}
             className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#4A90E2]" />
         </div>
+        <div className="space-y-1.5">
+          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">
+            Functional (Ledger) Currency <span className="text-gray-400 font-normal">— optional</span>
+          </label>
+          <input type="text" placeholder={`defaults to ${currency || "the account currency"}`} value={functionalCurrency} onChange={(e) => setFunctionalCurrency(e.target.value)}
+            className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#4A90E2]" />
+        </div>
       </div>
 
       <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
-        <Info size={11} /> OU / Business Unit map this account to its operating unit for row matching (stored in account_ou_map). File type: <span className="font-mono">{extension}</span>.
+        <Info size={11} /> OU / Business Unit map this account to its operating unit for row matching (stored in bank_ou_mapping.json). Only set Functional Currency if OU {ouNumber || "…"} is genuinely new — if it already exists, its current currency is kept as-is. File type: <span className="font-mono">{extension}</span>.
       </div>
 
       {saving && (

@@ -16,6 +16,17 @@
  *  - Reject: allowed for any non-terminal identified row
  *  - Remittance panel: right side, collapsed by default, auto-opens when found
  *  - Bug fix: hitl / validation fields removed — status derived from oracle.*
+ *
+ *  - NEW: Manual Invoice Mapping card — shown for any row that is NOT
+ *    already ready_for_oracle or processed (unidentified, needs_remittance,
+ *    conflict_exception, post_failed, rejected). Lets a SPOC hand-pick
+ *    invoice(s) from the currently-loaded aging report; amounts are
+ *    ALWAYS auto-loaded from the aging report, never typed. Confirming a
+ *    qualifying selection only RE-CLASSIFIES the row into ready_for_oracle
+ *    — it does NOT post to Oracle. The existing Approve & Post button
+ *    (already built above) is what actually posts, once the row shows up
+ *    there — same two-gate model as an automatic match.
+ *    Backend: hitl/manual_mapping.py via /api/hitl/{id}/mapping-*.
  */
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, Loader2,
@@ -25,7 +36,10 @@ import {
 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { approveEntry, rejectEntry, retryOracle, getRowDetail } from "@/lib/api";
+import {
+  approveEntry, rejectEntry, retryOracle, getRowDetail,
+  getMappingOptions, getInvoicesForCustomer, previewManualMapping, confirmManualMapping,
+} from "@/lib/api";
 
 // FastAPI validation errors (422) return detail as an array of
 // {type, loc, msg, input} objects — never render that directly as a
@@ -94,11 +108,22 @@ interface RowDetail {
     remittance_status:   string | null;
     hitl_status:         string | null;
     post_status:         string | null;
+    // PATCH: post_status (above) is the invoice-mapping outcome
+    // (reference_status on the backend) — it means "fully done, posted
+    // with real invoice mapping". receipt_creation_status means only "a
+    // bare receipt exists" — every row gets one during reconciliation,
+    // regardless of category. Don't conflate the two — see the READY
+    // badge logic below, which used to only check whether *a* payload
+    // existed (always true now) instead of what it actually represents.
+    receipt_creation_status?: string | null;
     post_message:        string | null;
     oracle_ref_no:       string | null;
     oracle_status_code:  string | null;
     standard_receipt_id: string | null;
     oracle_posted_at:    string | null;
+    // Present on newer backend builds — the actual Oracle response bodies.
+    receipt_response_raw?:   Record<string, any> | null;
+    reference_response_raw?: any[] | null;
   };
   remittance: {
     subject?:           string | null;
@@ -114,6 +139,35 @@ interface RowDetail {
     raw_body?:          string | null;
     filename?:          string | null;
   } | null;
+}
+
+// ── Manual invoice mapping types ─────────────────────────────────────────────
+
+interface MappingInvoiceOption {
+  invoice_number:     string;
+  outstanding_amount: number;
+  currency:           string | null;
+  ou_number:          string | null;
+  customer_name:      string | null;
+  customer_number:    string | null;
+}
+
+interface MappingOptionsResponse {
+  customer_identified: boolean;
+  customer_name:       string | null;
+  customers?:          string[];
+  invoices:            MappingInvoiceOption[];
+}
+
+interface MappingPreviewResponse {
+  qualifies:       boolean;
+  tag:             string | null;
+  rule_id:         string;
+  reason_code:     string;
+  message:         string;
+  target_total:    number;
+  received_total:  number;
+  shortfall_pct:   number;
 }
 
 // ── Reason-code → plain English ───────────────────────────────────────────────
@@ -420,6 +474,46 @@ function OraclePayloadTable({ payload, creditAmount }: { payload: Record<string,
   );
 }
 
+// ── Raw JSON viewer (collapsible) ────────────────────────────────────────────
+// Used for the actual Oracle response bodies — receipt creation + invoice
+// mapping — which the older OraclePayloadTable above doesn't cover (that
+// table renders the OUTBOUND request payload; this renders what Oracle
+// actually sent BACK).
+
+function RawResponseViewer({ title, data }: { title: string; data: any }) {
+  const [open, setOpen] = useState(false);
+  // PATCH: this used to `return null` entirely when data was missing —
+  // which looked exactly like the section didn't exist at all, with zero
+  // indication anything was ever supposed to be here. Now always renders
+  // the header; only the expand behavior changes based on whether data
+  // is actually present.
+  const hasData = data != null;
+  return (
+    <div className="border border-gray-200 rounded-xs overflow-hidden">
+      <button
+        onClick={() => hasData && setOpen(v => !v)}
+        disabled={!hasData}
+        className={`w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 transition-colors ${hasData ? "hover:bg-gray-100 cursor-pointer" : "cursor-default"}`}
+      >
+        <span className="text-[9px] font-black text-gray-500 uppercase tracking-wider">{title}</span>
+        <span className={`text-[9px] font-bold ${hasData ? "text-gray-400" : "text-gray-300 italic"}`}>
+          {hasData ? (open ? "Hide" : "Show") : "Not recorded for this row"}
+        </span>
+      </button>
+      {!hasData && (
+        <p className="px-4 py-2.5 text-[9px] text-gray-400 leading-relaxed border-t border-gray-100">
+          This row's receipt/mapping ran before this response was being saved, or that step hasn't run yet.
+        </p>
+      )}
+      {open && (
+        <pre className="text-[9px] font-mono text-gray-600 leading-relaxed whitespace-pre-wrap break-words bg-white p-3 max-h-[320px] overflow-y-auto">
+          {JSON.stringify(data, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RowDetailPage() {
@@ -435,6 +529,19 @@ export default function RowDetailPage() {
   const [actionError, setActionError]     = useState("");
   const [remittanceCollapsed, setRemittanceCollapsed] = useState(true);
 
+  // ── Manual invoice mapping state ────────────────────────────────────────────
+  const [mappingOptions, setMappingOptions]             = useState<MappingOptionsResponse | null>(null);
+  const [mappingOptionsLoading, setMappingOptionsLoading] = useState(false);
+  const [mappingOptionsError, setMappingOptionsError]   = useState("");
+  const [selectedCustomerForMapping, setSelectedCustomerForMapping] = useState("");
+  const [customerInvoiceOptions, setCustomerInvoiceOptions]         = useState<MappingInvoiceOption[]>([]);
+  const [selectedInvoiceNumbers, setSelectedInvoiceNumbers]         = useState<Set<string>>(new Set());
+  const [mappingPreview, setMappingPreview]             = useState<MappingPreviewResponse | null>(null);
+  const [mappingPreviewError, setMappingPreviewError]   = useState("");
+  const [mappingPreviewLoading, setMappingPreviewLoading] = useState(false);
+  const [confirmMappingLoading, setConfirmMappingLoading] = useState(false);
+  const [confirmMappingError, setConfirmMappingError]   = useState("");
+
   const fetchDetail = useCallback(async () => {
     if (!recordId) return;
     setLoading(true);
@@ -447,6 +554,87 @@ export default function RowDetailPage() {
 
   // Auto-open remittance panel when one was found
   useEffect(() => { if (detail?.remittance) setRemittanceCollapsed(false); }, [detail?.remittance]);
+
+  // Whether this row is even eligible for manual mapping — anything NOT
+  // already ready_for_oracle or processed. Computed early so both the
+  // fetch effect and the render below can use it.
+  const canManuallyMap = !!detail
+    && detail.category !== "ready_for_oracle"
+    && detail.category !== "processed";
+
+  const fetchMappingOptions = useCallback(async () => {
+    if (!recordId) return;
+    setMappingOptionsLoading(true);
+    setMappingOptionsError("");
+    setSelectedCustomerForMapping("");
+    setSelectedInvoiceNumbers(new Set());
+    setMappingPreview(null);
+    try {
+      const res = await getMappingOptions(recordId);
+      setMappingOptions(res.data);
+      setCustomerInvoiceOptions(res.data.customer_identified ? (res.data.invoices || []) : []);
+    } catch (e: any) {
+      setMappingOptionsError(formatApiError(e, "Could not load invoice mapping options."));
+    }
+    setMappingOptionsLoading(false);
+  }, [recordId]);
+
+  // Fetch mapping options once the row is loaded and known to be eligible.
+  useEffect(() => {
+    if (canManuallyMap) fetchMappingOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.id, detail?.category]);
+
+  const handleSelectCustomerForMapping = async (customerName: string) => {
+    setSelectedCustomerForMapping(customerName);
+    setSelectedInvoiceNumbers(new Set());
+    setMappingPreview(null);
+    setMappingOptionsError("");
+    if (!customerName) { setCustomerInvoiceOptions([]); return; }
+    try {
+      const res = await getInvoicesForCustomer(recordId, customerName);
+      setCustomerInvoiceOptions(res.data.invoices || []);
+    } catch (e: any) {
+      setMappingOptionsError(formatApiError(e, "Could not load invoices for that customer."));
+    }
+  };
+
+  const toggleInvoiceForMapping = (invoiceNumber: string) => {
+    setSelectedInvoiceNumbers(prev => {
+      const next = new Set(prev);
+      if (next.has(invoiceNumber)) next.delete(invoiceNumber); else next.add(invoiceNumber);
+      return next;
+    });
+  };
+
+  // Re-run the qualification preview every time the selection changes.
+  useEffect(() => {
+    if (selectedInvoiceNumbers.size === 0) { setMappingPreview(null); setMappingPreviewError(""); return; }
+    let cancelled = false;
+    setMappingPreviewLoading(true);
+    setMappingPreviewError("");
+    previewManualMapping(recordId, Array.from(selectedInvoiceNumbers))
+      .then(res => { if (!cancelled) setMappingPreview(res.data); })
+      .catch((e: any) => { if (!cancelled) { setMappingPreview(null); setMappingPreviewError(formatApiError(e, "Could not evaluate this selection.")); } })
+      .finally(() => { if (!cancelled) setMappingPreviewLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedInvoiceNumbers, recordId]);
+
+  const handleConfirmMapping = async () => {
+    if (selectedInvoiceNumbers.size === 0 || !mappingPreview?.qualifies) return;
+    setConfirmMappingLoading(true);
+    setConfirmMappingError("");
+    try {
+      await confirmManualMapping(recordId, Array.from(selectedInvoiceNumbers));
+      setSelectedInvoiceNumbers(new Set());
+      setMappingPreview(null);
+      setMappingOptions(null);
+      await fetchDetail();  // row's category should now be ready_for_oracle — Approve button appears, this card disappears
+    } catch (e: any) {
+      setConfirmMappingError(formatApiError(e, "Could not confirm this mapping."));
+    }
+    setConfirmMappingLoading(false);
+  };
 
   const goBack = () => {
     if (runIdParam) router.push(`/analysis-history?run_id=${runIdParam}`);
@@ -821,6 +1009,146 @@ export default function RowDetailPage() {
             </CardShell>
 
             {/* ══════════════════════════════════════════════
+                CARD 2.5 — Manual Invoice Mapping (NEW)
+                Shown for any row NOT already ready_for_oracle/processed.
+                Amounts are ALWAYS auto-loaded from the aging report —
+                never typed by the SPOC.
+            ══════════════════════════════════════════════ */}
+            {canManuallyMap && (
+              <CardShell>
+                <CardHead
+                  icon={<Hash size={13} />}
+                  title="Manual Invoice Mapping"
+                  right={<span className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Optional — from aging report</span>}
+                />
+                <div className="px-5 py-5 space-y-4">
+                  {mappingOptionsLoading ? (
+                    <div className="flex items-center gap-2 text-gray-400 text-[12px]">
+                      <Loader2 size={14} className="animate-spin" /> Loading aging report options…
+                    </div>
+                  ) : mappingOptionsError ? (
+                    <p className="text-[12px] text-red-600 font-semibold">{mappingOptionsError}</p>
+                  ) : mappingOptions ? (
+                    <>
+                      {!mappingOptions.customer_identified ? (
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider">Select Customer</label>
+                          <select
+                            value={selectedCustomerForMapping}
+                            onChange={(e) => handleSelectCustomerForMapping(e.target.value)}
+                            className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#4A90E2] cursor-pointer"
+                          >
+                            <option value="">— choose a customer —</option>
+                            {(mappingOptions.customers || []).map((c) => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                      ) : (
+                        <p className="text-[12px] text-gray-600">
+                          Customer already identified: <span className="font-black text-[#1E3A5F]">{mappingOptions.customer_name}</span>
+                        </p>
+                      )}
+
+                      {customerInvoiceOptions.length > 0 ? (
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
+                            Select Invoice(s) — amounts auto-loaded from aging report
+                          </label>
+                          <div className="border border-gray-200 rounded-xs overflow-hidden">
+                            <table className="w-full text-[11px]">
+                              <thead>
+                                <tr className="bg-[#1E3A5F] text-white">
+                                  <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider w-8"></th>
+                                  <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Invoice #</th>
+                                  <th className="px-3 py-2 text-right text-[9px] font-black uppercase tracking-wider">Outstanding</th>
+                                  <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Currency</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {customerInvoiceOptions.map((inv) => (
+                                  <tr key={inv.invoice_number}
+                                    className="hover:bg-blue-50/30 cursor-pointer"
+                                    onClick={() => toggleInvoiceForMapping(inv.invoice_number)}>
+                                    <td className="px-3 py-2">
+                                      <input type="checkbox"
+                                        checked={selectedInvoiceNumbers.has(inv.invoice_number)}
+                                        onChange={() => toggleInvoiceForMapping(inv.invoice_number)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="cursor-pointer" />
+                                    </td>
+                                    <td className="px-3 py-2 font-mono font-bold text-[#1E3A5F]">{inv.invoice_number}</td>
+                                    <td className="px-3 py-2 font-mono font-bold text-right text-[#1E3A5F]">{fmt(inv.outstanding_amount)}</td>
+                                    <td className="px-3 py-2 text-gray-400 font-mono">{inv.currency || "—"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ) : mappingOptions.customer_identified ? (
+                        <p className="text-[12px] text-gray-400 italic">No open invoices found for this customer in the loaded aging report.</p>
+                      ) : selectedCustomerForMapping ? (
+                        <p className="text-[12px] text-gray-400 italic">No open invoices found for this customer.</p>
+                      ) : null}
+
+                      {/* Live qualification feedback */}
+                      {selectedInvoiceNumbers.size > 0 && (
+                        <div className={`px-4 py-3 rounded-xs border flex items-start gap-3 ${
+                          mappingPreviewLoading ? "bg-gray-50 border-gray-200" :
+                          mappingPreview?.qualifies ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"
+                        }`}>
+                          {mappingPreviewLoading ? (
+                            <Loader2 size={14} className="animate-spin text-gray-400 shrink-0 mt-0.5" />
+                          ) : mappingPreview?.qualifies ? (
+                            <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
+                          ) : (
+                            <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            {mappingPreviewLoading ? (
+                              <p className="text-[11px] text-gray-500 font-semibold">Checking against business rules…</p>
+                            ) : mappingPreviewError ? (
+                              <p className="text-[11px] text-red-600 font-bold">{mappingPreviewError}</p>
+                            ) : mappingPreview ? (
+                              <>
+                                <p className={`text-[12px] font-bold ${mappingPreview.qualifies ? "text-emerald-800" : "text-amber-800"}`}>
+                                  {mappingPreview.message}
+                                </p>
+                                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-[10px] font-mono text-gray-500">
+                                  <span>Received: {fmt(mappingPreview.received_total)}</span>
+                                  <span>Selected total: {fmt(mappingPreview.target_total)}</span>
+                                  <span>Shortfall: {mappingPreview.shortfall_pct}%</span>
+                                </div>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                      )}
+
+                      {confirmMappingError && (
+                        <p className="text-[11px] text-red-600 font-bold">{confirmMappingError}</p>
+                      )}
+
+                      <div className="flex items-center gap-3">
+                        <button
+                          disabled={!mappingPreview?.qualifies || confirmMappingLoading}
+                          onClick={handleConfirmMapping}
+                          className="flex items-center gap-2 bg-[#1E3A5F] hover:bg-[#2E6DA4] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2.5 text-[11px] font-black uppercase tracking-wider rounded-sm cursor-pointer transition-colors"
+                        >
+                          {confirmMappingLoading ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} className="stroke-[3]" />}
+                          Confirm Mapping
+                        </button>
+                        <p className="text-[10px] text-gray-400 leading-snug">
+                          Moves this row to <span className="font-bold text-gray-500">Ready for Oracle</span> — does not post.
+                          Use Approve &amp; Post afterward.
+                        </p>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </CardShell>
+            )}
+
+            {/* ══════════════════════════════════════════════
                 CARD 3 — Aging snapshot
                 Only renders when invoices were matched.
             ══════════════════════════════════════════════ */}
@@ -974,18 +1302,47 @@ export default function RowDetailPage() {
                   icon={<Building2 size={13} />}
                   title="Oracle Fusion Payload"
                   right={
-                    hasOraclePayload ? (
-                      <span className="text-[9px] font-black text-emerald-600 uppercase tracking-wider flex items-center gap-1">
-                        <CheckCircle2 size={10} /> Ready
-                      </span>
-                    ) : (
-                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Not yet generated</span>
-                    )
+                    // PATCH: "Ready" used to just mean hasOraclePayload —
+                    // i.e. "a payload object exists at all". Since receipt
+                    // creation now runs for EVERY row regardless of
+                    // category (see rule_engine/orchestrator.py's Step
+                    // 4.5), that was true almost universally and told you
+                    // nothing about whether this row was actually done.
+                    // These are two separate, real states — show both.
+                    <div className="flex items-center gap-2">
+                      {oracle.receipt_creation_status === "success" ? (
+                        <span className="text-[9px] font-black text-blue-600 uppercase tracking-wider flex items-center gap-1">
+                          <CheckCircle2 size={10} /> Receipt Created
+                        </span>
+                      ) : oracle.receipt_creation_status === "failed" ? (
+                        <span className="text-[9px] font-black text-red-500 uppercase tracking-wider flex items-center gap-1">
+                          <X size={10} /> Receipt Failed
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Receipt Not Yet Created</span>
+                      )}
+                      {oracle.post_status === "success" ? (
+                        <span className="text-[9px] font-black text-emerald-600 uppercase tracking-wider flex items-center gap-1">
+                          <CheckCircle2 size={10} /> Invoice Mapped
+                        </span>
+                      ) : oracle.post_status === "failed" ? (
+                        <span className="text-[9px] font-black text-red-500 uppercase tracking-wider flex items-center gap-1">
+                          <X size={10} /> Mapping Failed
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-black text-gray-300 uppercase tracking-wider">Not Yet Mapped</span>
+                      )}
+                    </div>
                   }
                 />
                 {hasOraclePayload ? (
-                  <div className="px-5 py-5">
+                  <div className="px-5 py-5 space-y-4">
                     <OraclePayloadTable payload={oracle.payload} creditAmount={credit_amount} />
+                    {/* Actual Oracle response bodies — separate from the outbound
+                        payload above. Only present once the corresponding step
+                        has actually run. */}
+                    <RawResponseViewer title="Receipt Created Output (Oracle response)" data={oracle.receipt_response_raw} />
+                    <RawResponseViewer title="Invoice Mapping Output (Oracle response)" data={oracle.reference_response_raw} />
                   </div>
                 ) : (
                   <div className="px-5 py-8 text-center">

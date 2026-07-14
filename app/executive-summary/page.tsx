@@ -2,8 +2,10 @@
 /**
  * Executive Summary — /app/executive-summary
  *
- * Finance-executive facing view of ONLY records that have actually been
- * posted to Oracle Fusion (oracle_post_status == "success"). This is
+ * Finance-executive facing view of ONLY records that have actually
+ * completed invoice mapping in Oracle Fusion (reference_status == "success"
+ * — a receipt existing isn't enough; every row gets a bare receipt at
+ * reconciliation time regardless of category). This is
  * deliberately narrower than the main Dashboard / Analysis History pages,
  * which also show unidentified / pending / rejected rows — this page exists
  * so a CFO/controller can answer "what actually landed in Oracle, and how
@@ -319,7 +321,7 @@ export default function ExecutiveSummaryPage() {
           </h1>
           <p className="text-xs text-gray-600 mt-2 leading-relaxed max-w-2xl">
             {viewMode === "posted" ? (
-              <>Audit view of every record actually posted to Oracle Fusion — Full Payment, Acceptable Short Payment, and Cross Currency are the only three categories that ever reach Oracle.</>
+              <>Audit view of every record that has completed invoice mapping in Oracle Fusion — Full Payment, Acceptable Short Payment, and Cross Currency are the only three categories that ever reach Oracle.</>
             ) : (
               <>Everything that has NOT yet reached Oracle — unidentified rows, rows awaiting remittance, conflicts/exceptions, Cross-OU exposure, rejections, and post failures.</>
             )}
@@ -330,7 +332,7 @@ export default function ExecutiveSummaryPage() {
             onClick={() => setViewMode("posted")}
             className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-xs transition-all cursor-pointer ${viewMode === "posted" ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}
           >
-            Posted Records
+            Invoice Mapped Records
           </button>
           <button
             onClick={() => setViewMode("non_posted")}
@@ -361,7 +363,7 @@ export default function ExecutiveSummaryPage() {
               {viewMode === "posted" ? (
                 summary ? (
                   <>
-                    <span className="font-bold text-primary">{summary.total_posted.toLocaleString()}</span> records posted ·{" "}
+                    <span className="font-bold text-primary">{summary.total_posted.toLocaleString()}</span> invoices mapped ·{" "}
                     <span className="font-bold text-primary">{fmtAmount(summary.total_amount)}</span> total credited
                   </>
                 ) : (
@@ -369,7 +371,7 @@ export default function ExecutiveSummaryPage() {
                 )
               ) : nonPostedSummary ? (
                 <>
-                  <span className="font-bold text-primary">{nonPostedSummary.total_non_posted.toLocaleString()}</span> records not yet posted
+                  <span className="font-bold text-primary">{nonPostedSummary.total_non_posted.toLocaleString()}</span> invoices not yet mapped
                 </>
               ) : (
                 "Loading totals…"
@@ -538,7 +540,7 @@ export default function ExecutiveSummaryPage() {
       <div className="bg-white border border-gray-200 shadow-xs">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>
-            <h2 className="text-xs font-black text-primary uppercase tracking-wider">Posted Records</h2>
+            <h2 className="text-xs font-black text-primary uppercase tracking-wider">Invoice Mapped Records</h2>
             <p className="text-[11px] text-gray-500 mt-0.5">
               {total.toLocaleString()} record{total === 1 ? "" : "s"} match the current filters
             </p>
@@ -568,7 +570,7 @@ export default function ExecutiveSummaryPage() {
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-gray-50/60 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                <th className="text-left px-4 py-2.5">Posted Date</th>
+                <th className="text-left px-4 py-2.5">Mapped Date</th>
                 <th className="text-left px-4 py-2.5">Bank</th>
                 <th className="text-left px-4 py-2.5">Business Unit</th>
                 <th className="text-left px-4 py-2.5">OU</th>
@@ -589,7 +591,7 @@ export default function ExecutiveSummaryPage() {
               ) : records.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="text-center py-10 text-gray-400 font-medium">
-                    No posted records match the current filters.
+                    No invoice-mapped records match the current filters.
                   </td>
                 </tr>
               ) : (
@@ -628,7 +630,7 @@ export default function ExecutiveSummaryPage() {
       <div className="bg-white border border-gray-200 shadow-xs">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>
-            <h2 className="text-xs font-black text-primary uppercase tracking-wider">Non-Posted Records</h2>
+            <h2 className="text-xs font-black text-primary uppercase tracking-wider">Non-Invoice Mapped Records</h2>
             <p className="text-[11px] text-gray-500 mt-0.5">
               {nonPostedTotal.toLocaleString()} record{nonPostedTotal === 1 ? "" : "s"} match the current filters
             </p>

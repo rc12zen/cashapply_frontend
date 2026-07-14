@@ -53,6 +53,16 @@ export const getMe = () => API.get("/api/auth/me");
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 export const getFiles        = ()                         => API.get("/api/run/files");
+
+/**
+ * Groups current (non-archived) statement files by bank account, with a
+ * LIVE unconsumed-row count per account (not the stale per-file snapshot).
+ * Backs the account-level "include in next run" checkboxes — the
+ * orchestrator consumes rows by account, not by file, so selection must
+ * happen at the same granularity or it silently wouldn't match real
+ * run behavior.
+ */
+export const getPendingByAccount = () => API.get("/api/run/pending-by-account");
 export const startRun        = (selectedFiles: string[])  => API.post("/api/run/start", { selected_files: selectedFiles });
 export const getStatus       = ()                         => API.get("/api/run/status");
 export const resetRun        = ()                         => API.post("/api/run/reset");
@@ -102,7 +112,6 @@ export const getRunHistory = (
   bankName?: string,
   businessUnit?: string,
   triggeredBy?: string,
-  status?: string,
 ) => {
   const params: Record<string, string | number> = { page, page_size: pageSize };
   if (dateFrom) params.date_from = dateFrom;
@@ -110,7 +119,6 @@ export const getRunHistory = (
   if (bankName)     params.bank_name     = bankName;
   if (businessUnit) params.business_unit = businessUnit;
   if (triggeredBy)  params.triggered_by  = triggeredBy;
-  if (status)       params.status        = status;
   return API.get("/api/run/history", { params });
 };
 
@@ -275,6 +283,16 @@ export const rejectEntry        = (id: number, comment?: string) => API.post(`/a
 export const approveBulk        = (ids: number[])                => API.post("/api/hitl/approve-bulk", { ids });
 export const getHitlHistory     = ()                             => API.get("/api/hitl/history");
 export const retryOracle        = (id: number)                   => API.post(`/api/hitl/retry-oracle/${id}`);
+
+// ── Manual invoice mapping ───────────────────────────────────────────────────
+// For rows that didn't land in ready_for_oracle automatically. Confirming
+// only re-classifies the row into ready_for_oracle — it does NOT post to
+// Oracle. Use the existing approveEntry/approveBulk to actually post,
+// same as any other ready_for_oracle row. See hitl/manual_mapping.py.
+export const getMappingOptions       = (id: number)                              => API.get(`/api/hitl/${id}/mapping-options`);
+export const getInvoicesForCustomer  = (id: number, customerName: string)         => API.get(`/api/hitl/${id}/mapping-options/customer`, { params: { customer_name: customerName } });
+export const previewManualMapping    = (id: number, invoiceNumbers: string[])     => API.post(`/api/hitl/${id}/mapping-preview`, { invoice_numbers: invoiceNumbers });
+export const confirmManualMapping    = (id: number, invoiceNumbers: string[])     => API.post(`/api/hitl/${id}/mapping-confirm`, { invoice_numbers: invoiceNumbers });
 
 /**
  * Approve a record.
