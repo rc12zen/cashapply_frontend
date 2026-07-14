@@ -32,6 +32,16 @@
  *     every bucket in `tabData`, not just matched+not_found, so "All"
  *     actually means all 41 rows again instead of missing whichever rows
  *     used to live only in review_approve/processed.
+ *   - NAVIGATION FIX: rows in every group — including Unidentified — are
+ *     now clickable. Previously the row `onClick` (and the matching hover
+ *     style) was gated on `isMatch` (`_source === "matched"`), which
+ *     silently blocked navigation to the row-detail page for any
+ *     unidentified row. That page hosts the "Manual Invoice Mapping" card,
+ *     which is precisely the workflow a SPOC needs for unidentified rows —
+ *     so blocking navigation there made that card unreachable. Navigation
+ *     is now gated only on the row having a valid `id`; Approve/Reject
+ *     eligibility (`canApprove` / `canReject` below) still correctly key
+ *     off `isMatch` and `category`, unchanged from before.
  *
  * Navigation:
  *   - "View" on a run pushes ?run_id=<run_id> into the URL.
@@ -862,11 +872,23 @@ function AnalysisHistoryPageInner() {
                       );
                       const canReject = isRejectable && line.hitl_status !== "rejected" && line.hitl_status !== "approved";
 
+                      // NAVIGATION FIX: previously gated on `isMatch`, which
+                      // blocked opening any Unidentified row entirely (they
+                      // have no matched_customer/matched_invoice, but the
+                      // row-detail page handles that fine — see its own
+                      // empty-state branches — and hosts the Manual Invoice
+                      // Mapping card, which is exactly what a SPOC needs for
+                      // these rows). Now gated only on having a real id, so
+                      // every group's rows are clickable. Approve/Reject
+                      // above remain correctly gated on isMatch/category —
+                      // only navigation eligibility changed.
+                      const canOpenRow = !!line.id;
+
                       return (
                         <>
                         <tr key={line.id}
-                          onClick={() => isMatch && router.push(`/analysis-history/row/${line.id}?run_id=${viewingRun.run_id}`)}
-                          className={`transition-colors group ${isMatch ? "cursor-pointer hover:bg-blue-50/40" : "hover:bg-gray-50/80"} ${selectedLines[line.id]?"bg-blue-50/20":""}`}>
+                          onClick={() => canOpenRow && router.push(`/analysis-history/row/${line.id}?run_id=${viewingRun.run_id}`)}
+                          className={`transition-colors group ${canOpenRow ? "cursor-pointer hover:bg-blue-50/40" : "hover:bg-gray-50/80"} ${selectedLines[line.id]?"bg-blue-50/20":""}`}>
                           <td className="px-3 py-3 text-center">
                             <input type="checkbox" checked={!!selectedLines[line.id]}
                               onChange={() => setSelectedLines((p) => ({...p,[line.id]:!p[line.id]}))}
