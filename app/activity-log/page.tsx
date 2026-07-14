@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type React from "react";
-import { getActivityLog } from "@/lib/api";
+import { getActivityLog, getActivityUsers } from "@/lib/api";
 
 // --- LOG SYSTEM SCHEMA — mirrors bff/activity_log_routes.py's response ---
 interface ActivityLogEntry {
@@ -28,15 +28,17 @@ interface ActivityLogEntry {
 	status: "success" | "failure";
 	ip_address: string | null;
 	metadata: Record<string, unknown> | null;
+	summary: string;
 	created_at: string | null;
 }
 
 const PILLS = [
-	{ key: null, label: "All Actions" },
-	{ key: "file_upload", label: "File Uploads" },
-	{ key: "analysis_run", label: "Analysis Runs" },
-	{ key: "approved", label: "Approvals" },
-	{ key: "rejected", label: "Rejections" },
+	{ key: "analysis_run", label: "Analysis Run" },
+	{ key: "config_creation", label: "Configure Creation" },
+	{ key: "system", label: "System Logs" },
+	{ key: "approved", label: "Accepted" },
+	{ key: "rejected", label: "Rejected" },
+	{ key: null, label: "All Logs" },
 ] as const;
 
 // Best-effort human label for the raw `action` string (e.g. "hitl.approve",
@@ -52,24 +54,12 @@ function describeAction(entry: ActivityLogEntry): { label: string; icon: React.R
 		return { label: "Analysis Run", icon: <Play size={11} />, styles: "bg-purple-50 text-purple-700 border-purple-200" };
 	}
 	if (a.startsWith("hitl.approve") || a.startsWith("oracle.retry")) {
-		return { label: "Approved", icon: <CheckCircle size={11} />, styles: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+		return { label: "Accepted", icon: <CheckCircle size={11} />, styles: "bg-emerald-50 text-emerald-700 border-emerald-200" };
 	}
 	if (a.startsWith("hitl.reject")) {
 		return { label: "Rejected", icon: <XCircle size={11} />, styles: "bg-rose-50 text-rose-700 border-rose-200" };
 	}
 	return { label: a.startsWith("GET ") ? "Viewed" : "System Log", icon: <History size={11} />, styles: "bg-gray-50 text-gray-700 border-gray-200" };
-}
-
-function describeEntry(entry: ActivityLogEntry): string {
-	const who = entry.user_email || "System";
-	const meta = entry.metadata ? JSON.stringify(entry.metadata) : "";
-	if (entry.action.startsWith("GET ") || entry.action.startsWith("POST ") ||
-		entry.action.startsWith("PUT ") || entry.action.startsWith("DELETE ") ||
-		entry.action.startsWith("PATCH ")) {
-		return `${who} called ${entry.action}${entry.status === "failure" ? " (failed)" : ""}`;
-	}
-	const target = entry.entity_type ? `${entry.entity_type}${entry.entity_id ? ` #${entry.entity_id}` : ""}` : "";
-	return `${who} — ${entry.action}${target ? ` on ${target}` : ""}${meta ? ` (${meta})` : ""}`;
 }
 
 function fmtTimestamp(iso: string | null): string {
@@ -83,10 +73,12 @@ function fmtTimestamp(iso: string | null): string {
 }
 
 export default function ActivityLogPage() {
-	const [activePill, setActivePill] = useState<(typeof PILLS)[number]["key"]>(null);
+	const [activePill, setActivePill] = useState<(typeof PILLS)[number]["key"]>("analysis_run");
 	const [dateFrom, setDateFrom] = useState("");
 	const [dateTo, setDateTo] = useState("");
 	const [searchQuery, setSearchQuery] = useState("");
+	const [userOptions, setUserOptions] = useState<string[]>([]);
+	const [selectedUser, setSelectedUser] = useState("All Users");
 
 	const [logs, setLogs] = useState<ActivityLogEntry[]>([]);
 	const [total, setTotal] = useState(0);
@@ -103,6 +95,7 @@ export default function ActivityLogPage() {
 				page: pageArg,
 				pageSize,
 				category: activePill ?? undefined,
+				userEmail: activePill !== "system" && selectedUser !== "All Users" ? selectedUser : undefined,
 				dateFrom: dateFrom || undefined,
 				dateTo: dateTo || undefined,
 			});
@@ -114,20 +107,27 @@ export default function ActivityLogPage() {
 			setError("Could not load the activity log from the backend.");
 		}
 		setLoading(false);
-	}, [activePill, dateFrom, dateTo]);
+	}, [activePill, selectedUser, dateFrom, dateTo]);
 
 	useEffect(() => {
 		setPage(1);
 		load(1);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [activePill, dateFrom, dateTo]);
+	}, [activePill, selectedUser, dateFrom, dateTo]);
+
+	// Load distinct users for the filter dropdown (once on mount).
+	useEffect(() => {
+		getActivityUsers()
+			.then((res) => setUserOptions(res.data.users || []))
+			.catch(() => setUserOptions([]));
+	}, []);
 
 	// --- Client-side free-text search over the currently loaded page ---
 	const filteredLogs = useMemo(() => {
 		if (!searchQuery) return logs;
 		const q = searchQuery.toLowerCase();
 		return logs.filter((log) =>
-			describeEntry(log).toLowerCase().includes(q) ||
+			log.summary.toLowerCase().includes(q) ||
 			(log.user_email || "").toLowerCase().includes(q) ||
 			log.action.toLowerCase().includes(q)
 		);
@@ -135,10 +135,10 @@ export default function ActivityLogPage() {
 
 	const exportLogsToCSV = () => {
 		if (!filteredLogs.length) return;
-		const headers = ["ID", "Timestamp", "Action", "User", "Entity Type", "Entity ID", "Status", "IP Address"].join(",");
+		const headers = ["ID", "Timestamp", "Description", "Action", "User", "Entity Type", "Entity ID", "Status", "IP Address"].join(",");
 		const rows = filteredLogs
 			.map((l) =>
-				`"${l.id}","${fmtTimestamp(l.created_at)}","${l.action}","${l.user_email ?? "System"}","${l.entity_type ?? ""}","${l.entity_id ?? ""}","${l.status}","${l.ip_address ?? ""}"`,
+				`"${l.id}","${fmtTimestamp(l.created_at)}","${l.summary.replace(/"/g, '""')}","${l.action}","${l.user_email ?? "System"}","${l.entity_type ?? ""}","${l.entity_id ?? ""}","${l.status}","${l.ip_address ?? ""}"`,
 			)
 			.join("\n");
 		const blob = new Blob([headers + "\n" + rows], { type: "text/csv;charset=utf-8;" });
@@ -203,10 +203,24 @@ export default function ActivityLogPage() {
 				))}
 			</div>
 
-			{/* FILTER CONSOLE — timeline + search (bank/user removed: ActivityLog
-			    has no bank dimension, and a user_id dropdown would need a
-			    dedicated /api/admin/users list — search covers "by user" for now) */}
-			<div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white border border-gray-200 p-4 rounded-sm shadow-2xs">
+			{/* FILTER CONSOLE — user + search + timeline (no user filter on System Logs — all rows are System) */}
+			<div className={`grid grid-cols-1 ${activePill === "system" ? "sm:grid-cols-3" : "sm:grid-cols-4"} gap-3 bg-white border border-gray-200 p-4 rounded-sm shadow-2xs`}>
+				{activePill !== "system" && (
+					<div className="relative flex items-center">
+						<User size={13} className="absolute left-3 text-gray-400 pointer-events-none" />
+						<select
+							value={selectedUser}
+							onChange={(e) => setSelectedUser(e.target.value)}
+							className="w-full bg-gray-50 border border-gray-300 rounded-sm text-xs font-bold text-primary pl-9 pr-3 py-2 outline-none focus:border-[#4A90E2] cursor-pointer"
+						>
+							<option>All Users</option>
+							{userOptions.map((o) => (
+								<option key={o}>{o}</option>
+							))}
+						</select>
+					</div>
+				)}
+
 				<div className="relative sm:col-span-1">
 					<Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
 					<input
@@ -284,7 +298,7 @@ export default function ActivityLogPage() {
 										</div>
 
 										<p className="text-xs text-gray-700 leading-relaxed font-medium">
-											{describeEntry(log)}
+											{log.summary}
 										</p>
 
 										<div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-gray-400 pt-0.5">
