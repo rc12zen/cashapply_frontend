@@ -51,6 +51,16 @@ API.interceptors.response.use(
  */
 export const getMe = () => API.get("/api/auth/me");
 
+// ── Admin: user management (admin-only; gated on "user:manage") ─────────────────
+export const getUsers = () => API.get("/api/admin/users");
+export const getRoles = () => API.get("/api/admin/roles");
+export const onboardUser = (payload: { email: string; display_name?: string; role_name: string }) =>
+	API.post("/api/admin/users", payload);
+export const updateUser = (id: number, payload: { display_name?: string; role_name?: string }) =>
+	API.put(`/api/admin/users/${id}`, payload);
+export const setUserActive = (id: number, is_active: boolean) =>
+	API.put(`/api/admin/users/${id}/active`, { is_active });
+
 // ── Run ───────────────────────────────────────────────────────────────────────
 export const getFiles        = ()                         => API.get("/api/run/files");
 
