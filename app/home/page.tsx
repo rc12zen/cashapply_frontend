@@ -443,6 +443,29 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [runStatus.status, fetchStatus]);
 
+  // Reconcile the file / account lists with the backend when the tab regains
+  // focus. pollIngestStatus only updates a file's badge during its ~2-minute
+  // window, then stops — and fetchFiles otherwise runs only on mount / after a
+  // run. So if a file's real status later changed (e.g. it was re-ingested to
+  // "ready" after its config was added, or a run consumed its rows) while this
+  // tab sat idle, the badge would show a stale status — including a stale
+  // "Error" on a file that is actually ready — until a manual reload. Re-syncing
+  // on focus lets the UI self-heal to the backend's truth automatically.
+  useEffect(() => {
+    const resync = () => {
+      if (document.visibilityState === "hidden") return;
+      if (runStatus.status === "running") return; // the run poller already refreshes
+      fetchFiles();
+      fetchPendingByAccount();
+    };
+    window.addEventListener("focus", resync);
+    document.addEventListener("visibilitychange", resync);
+    return () => {
+      window.removeEventListener("focus", resync);
+      document.removeEventListener("visibilitychange", resync);
+    };
+  }, [fetchFiles, fetchPendingByAccount, runStatus.status]);
+
   useEffect(() => {
     if (runStatus.status !== "running") {
       setElapsedSeconds(0);
