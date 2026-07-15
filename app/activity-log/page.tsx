@@ -44,7 +44,6 @@ interface ActivityLogEntry {
 // distinct, worth-tracking action that didn't have its own pill before.
 const PILLS = [
 	{ key: "analysis_run", label: "Analysis Run" },
-	{ key: "config_creation", label: "Configure Creation" },
 	{ key: "manual_mapping", label: "Manual Invoice Mapping" },
 	{ key: "approved", label: "Accepted" },
 	{ key: "rejected", label: "Rejected" },
