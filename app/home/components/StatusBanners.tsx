@@ -1,6 +1,5 @@
 "use client";
 import { AlertTriangle, ArrowRight, CheckCircle2, X } from "lucide-react";
-import type { MutableRefObject } from "react";
 
 export interface DuplicateUploadInfo {
   filename: string;
@@ -23,8 +22,7 @@ interface StatusBannersProps {
   duplicateUploadInfo: DuplicateUploadInfo | null;
   setDuplicateUploadInfo: (v: DuplicateUploadInfo | null) => void;
   successMessage: string;
-  setSuccessMessage: (v: string) => void;
-  successTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
+  onDismissSuccess: () => void; // advances to the next queued success message, if any
   runCompletionSummary: RunCompletionSummary | null;
   setRunCompletionSummary: (v: RunCompletionSummary | null) => void;
   configNeededNotice: string;
@@ -35,15 +33,16 @@ interface StatusBannersProps {
 
 /**
  * Every dismissible top-of-page banner: connection/action errors, the
- * actionable "duplicate file" banner (backend design doc §2.1), transient
- * success toasts, and the post-run completion summary. Pulled out of
- * page.tsx as one unit since they're all simple, independent, dismissible
- * strips driven by otherwise-unrelated pieces of state.
+ * actionable "duplicate file" banner (backend design doc §2.1), success
+ * confirmations (persistent — no auto-dismiss timer, see page.tsx's
+ * showSuccess/advanceSuccessQueue), and the post-run completion summary.
+ * Pulled out of page.tsx as one unit since they're all simple, independent,
+ * dismissible strips driven by otherwise-unrelated pieces of state.
  */
 export default function StatusBanners({
   error, setError,
   duplicateUploadInfo, setDuplicateUploadInfo,
-  successMessage, setSuccessMessage, successTimerRef,
+  successMessage, onDismissSuccess,
   runCompletionSummary, setRunCompletionSummary,
   configNeededNotice, setConfigNeededNotice,
   uploadNotice, setUploadNotice,
@@ -143,7 +142,7 @@ export default function StatusBanners({
             <span className="font-medium">{successMessage}</span>
           </div>
           <button
-            onClick={() => { if (successTimerRef.current) clearTimeout(successTimerRef.current); setSuccessMessage(""); }}
+            onClick={onDismissSuccess}
             className="text-gray-400 hover:text-gray-600 px-2"
           >
             ×

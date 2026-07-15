@@ -168,6 +168,12 @@ export default function Dashboard() {
     try {
       const res = await getFiles();
       setFiles(res.data.files);
+      // Self-heal: this specific message is a pure connectivity signal, not
+      // an action result — once a fetch succeeds again, the backend is
+      // reachable, so clear it automatically instead of waiting for a
+      // manual dismiss. Every other error message stays as manual-dismiss
+      // only (see StatusBanners) — this is a deliberate one-off exception.
+      setError((prev) => (prev === "Could not connect to backend system." ? "" : prev));
     } catch {
       setError("Could not connect to backend system.");
     }
@@ -399,15 +405,12 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [runStatus.status]);
 
-  // Success toasts are QUEUED rather than clobbering each other. Previously a
-  // new showSuccess() call immediately replaced the visible message, so when
-  // several fired in a burst (e.g. an upload's "processing" toast, then a
-  // re-ingest completing, then a detect refresh) earlier messages flashed by
-  // in a fraction of a second — unreadable. Now each message is shown for its
-  // full duration in turn, and an identical message that's already showing or
-  // queued is de-duplicated (so a repeated "…is ready…" can't spam the bar).
-  const SUCCESS_MS = 6000;
-  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // null = idle
+  // Success messages are QUEUED and now PERSISTENT — no auto-dismiss timer.
+  // Previously each one auto-advanced after SUCCESS_MS, which is why these
+  // were disappearing on their own. Now the current message stays up until
+  // the person dismisses it (×), at which point the next queued one (if any)
+  // takes its place. An identical message already showing or queued is
+  // de-duplicated (so a repeated "…is ready…" can't spam the bar).
   const successQueueRef = useRef<string[]>([]);
   const currentSuccessRef = useRef<string>("");
 
@@ -416,12 +419,10 @@ export default function Dashboard() {
     if (next === undefined) {
       setSuccessMessage("");
       currentSuccessRef.current = "";
-      successTimerRef.current = null; // idle — next showSuccess starts immediately
       return;
     }
     setSuccessMessage(next);
     currentSuccessRef.current = next;
-    successTimerRef.current = setTimeout(advanceSuccessQueue, SUCCESS_MS);
   };
 
   const showSuccess = (msg: string) => {
@@ -429,7 +430,7 @@ export default function Dashboard() {
     // De-dupe: skip if it's the message on screen now or already waiting.
     if (msg === currentSuccessRef.current || successQueueRef.current.includes(msg)) return;
     successQueueRef.current.push(msg);
-    if (successTimerRef.current === null) advanceSuccessQueue(); // idle → show now
+    if (!currentSuccessRef.current) advanceSuccessQueue(); // idle → show now
   };
 
   // PATCH: true when the currently-listed statement files are EXACTLY the
@@ -736,7 +737,7 @@ export default function Dashboard() {
 				<StatusBanners
 					error={error} setError={setError}
 					duplicateUploadInfo={duplicateUploadInfo} setDuplicateUploadInfo={setDuplicateUploadInfo}
-					successMessage={successMessage} setSuccessMessage={setSuccessMessage} successTimerRef={successTimerRef}
+					successMessage={successMessage} onDismissSuccess={advanceSuccessQueue}
 					runCompletionSummary={runCompletionSummary} setRunCompletionSummary={setRunCompletionSummary}
 					configNeededNotice={configNeededNotice} setConfigNeededNotice={setConfigNeededNotice}
 					uploadNotice={uploadNotice} setUploadNotice={setUploadNotice}
