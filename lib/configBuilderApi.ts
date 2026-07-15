@@ -7,6 +7,17 @@ import type { AccountLocator, LocateAccountResult, SaveRecipePayload } from "./c
 const API = axios.create({ baseURL: "http://localhost:8000" });
 
 // ── Wizard ──────────────────────────────────────────────────────────────────
+// Upload a report for the wizard WITHOUT triggering ingestion (config-building
+// is the no-config-yet case, so the ingest pipeline would always fail
+// detection). Returns { filename, source_file_id }.
+export const uploadBuilderFile = (file: File) => {
+  const form = new FormData();
+  form.append("file", file);
+  return API.post("/api/config/builder/upload", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+};
+
 export const getBuilderRawPreview = (filename: string) =>
   API.get(`/api/config/builder/raw-preview/${encodeURIComponent(filename)}`);
 

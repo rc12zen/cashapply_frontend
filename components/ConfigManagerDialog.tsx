@@ -95,12 +95,12 @@ export default function ConfigManagerDialog({ onClose }: { onClose: () => void }
                 </div>
                 {/* format recipes */}
                 <div className="flex flex-wrap gap-1.5 mt-2">
-                  {a.formats.map((fmt) => (
-                    <span key={fmt} className="flex items-center gap-1 text-[10px] font-mono bg-gray-100 border border-gray-200 text-gray-600 px-2 py-0.5 rounded-xs">
-                      {fmt}
-                      <button onClick={() => removeRecipe(a.account_number, fmt)} disabled={busy === `${a.account_number}:${fmt}`}
-                        title={`Delete ${fmt} recipe`} className="hover:text-red-500 transition-colors">
-                        {busy === `${a.account_number}:${fmt}` ? <Loader2 size={9} className="animate-spin" /> : <X size={9} />}
+                  {a.formats.map((f) => (
+                    <span key={f.format} className="flex items-center gap-1 text-[10px] font-mono bg-gray-100 border border-gray-200 text-gray-600 px-2 py-0.5 rounded-xs">
+                      {f.format}
+                      <button onClick={() => removeRecipe(a.account_number, f.format)} disabled={busy === `${a.account_number}:${f.format}`}
+                        title={`Delete ${f.format} recipe`} className="hover:text-red-500 transition-colors">
+                        {busy === `${a.account_number}:${f.format}` ? <Loader2 size={9} className="animate-spin" /> : <X size={9} />}
                       </button>
                     </span>
                   ))}

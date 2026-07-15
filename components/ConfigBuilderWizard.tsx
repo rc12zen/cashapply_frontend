@@ -34,7 +34,11 @@ const LOGICAL_FIELDS: { name: LogicalField; label: string; required: boolean }[]
   { name: "account_number", label: "Account Number", required: true },
   { name: "currency",       label: "Currency",       required: true },
   { name: "bank_name",      label: "Bank Name",      required: true },
-  { name: "bank_reference", label: "Bank Reference", required: true },
+  // Optional: the bank's own transaction reference is nullable downstream and
+  // many statements don't carry it — the "Not in this file" (none) option must
+  // be a valid choice, so this can't be required (a required field can never be
+  // satisfied by "none", which would wedge the Next button — see canProceed).
+  { name: "bank_reference", label: "Bank Reference", required: false },
 ];
 
 // Strong, general account-number matcher for the regex locator. Captures any
@@ -70,6 +74,15 @@ interface Props {
   filename: string;
   onClose: () => void;
   onSaved: (configKey: string) => void;
+}
+
+// Best-effort author for the version stamp. configBuilderApi uses its own axios
+// instance without the dev-user interceptor, so the wizard reads the login stub
+// cookie directly and passes created_by explicitly. Returns undefined if unset.
+function readLoginStub(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  const match = document.cookie.match(/(?:^|; )login_user_email_stub=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : undefined;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -321,6 +334,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         ou_number: ouNumber.trim() || undefined,
         business_unit: businessUnit.trim() || undefined,
         functional_currency: functionalCurrency.trim() || undefined,
+        created_by: readLoginStub(),
       });
       onSaved(accountNumber.trim());
     } catch (e: any) {
@@ -1588,7 +1602,7 @@ function StepLocateAccount({
                   {exists && (
                     <span className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs">
                       <AlertTriangle size={10} /> exists ({exists.join(", ")})
-                      {exists.includes(fmt) ? ` — saving replaces the ${fmt} recipe` : ` — this adds a ${fmt} recipe`}
+                      {exists.includes(fmt) ? ` — saving adds a new ${fmt} version` : ` — this adds a ${fmt} recipe`}
                     </span>
                   )}
                 </label>

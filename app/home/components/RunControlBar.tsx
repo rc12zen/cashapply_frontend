@@ -1,6 +1,6 @@
 "use client";
 import { ArrowRight, CheckCircle2, Play, RefreshCw, UploadCloud } from "lucide-react";
-import type { AccountGroup, FileInfo } from "../types";
+import { type AccountGroup, type FileInfo, isAccountRunnable } from "../types";
 
 interface RunControlBarProps {
   isRunning: boolean;
@@ -25,6 +25,12 @@ export default function RunControlBar({
   accountGroups, isAccountSelected, elapsedSeconds, fmtElapsed, onStart,
 }: RunControlBarProps) {
   const selectedCount = accountGroups.filter((g) => isAccountSelected(g.key)).length;
+  // Only recognised accounts with pending rows can actually be analyzed —
+  // an "Unknown"/0-row statement being checked must NOT enable the run.
+  const runnableSelectedCount = accountGroups.filter(
+    (g) => isAccountSelected(g.key) && isAccountRunnable(g),
+  ).length;
+  const hasUnrunnableSelected = selectedCount > runnableSelectedCount;
 
   return (
     <div
@@ -74,11 +80,17 @@ export default function RunControlBar({
           ) : agingStatus.loaded && files.length > 0 ? (
             <div>
               <span className="font-bold text-sm tracking-wide text-white">
-                Ready for analysis
+                {runnableSelectedCount > 0 ? "Ready for analysis" : "Nothing to analyze"}
               </span>
               <p className="text-[10px] text-blue-100 mt-0.5">
-                {selectedCount} of {accountGroups.length} account{accountGroups.length === 1 ? "" : "s"} selected —
-                uncheck any you don't want included in this run.
+                {runnableSelectedCount > 0 ? (
+                  <>
+                    {runnableSelectedCount} analyzable account{runnableSelectedCount === 1 ? "" : "s"} selected
+                    {hasUnrunnableSelected ? " — Unknown / empty statements are skipped." : " — uncheck any you don't want included."}
+                  </>
+                ) : (
+                  <>No recognised statements with pending rows. Configure any &ldquo;Unknown&rdquo; statements from the Config tab first.</>
+                )}
               </p>
             </div>
           ) : (
@@ -93,7 +105,7 @@ export default function RunControlBar({
         onClick={onStart}
         disabled={
           isRunning || loading || files.length === 0 || !agingStatus.loaded || filesAlreadyAnalyzed ||
-          selectedCount === 0
+          runnableSelectedCount === 0
         }
         className={`w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 font-bold text-xs uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-xs whitespace-nowrap cursor-pointer
       ${
