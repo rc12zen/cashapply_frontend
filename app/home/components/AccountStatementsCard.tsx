@@ -64,7 +64,9 @@ export default function AccountStatementsCard({
             const selected = runnable && isAccountSelected(g.key);
             const disabledReason = g.bank_account_id == null
               ? "Configure this account (Config tab) before it can be analyzed"
-              : "No pending rows to analyze";
+              : g.last_consumed_run_id != null
+                ? `All rows from this statement were already processed in run #${g.last_consumed_run_id} — this is a duplicate, nothing new to analyze`
+                : "No pending rows to analyze";
             return (
               <div key={g.key} className="border border-gray-200 rounded-xs overflow-hidden">
                 <label

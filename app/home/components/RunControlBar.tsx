@@ -32,6 +32,21 @@ export default function RunControlBar({
   ).length;
   const hasUnrunnableSelected = selectedCount > runnableSelectedCount;
 
+  const selectedGroups = accountGroups.filter((g) => isAccountSelected(g.key));
+  // Of the selected-but-not-runnable accounts, split "genuinely unrecognised"
+  // (no bank_account_id — needs a Config tab fix) from "recognised, but every
+  // row we have from it was already consumed by an earlier run" (a re-upload
+  // of an already-processed statement — nothing wrong with the config, it's
+  // just a duplicate). These need different copy and the second one gets a
+  // direct link to the run that already processed it.
+  const unknownSelected = selectedGroups.filter(
+    (g) => !isAccountRunnable(g) && g.bank_account_id == null,
+  );
+  const duplicateSelected = selectedGroups.filter(
+    (g) => !isAccountRunnable(g) && g.bank_account_id != null && g.last_consumed_run_id != null,
+  );
+  const duplicateRunIds = Array.from(new Set(duplicateSelected.map((g) => g.last_consumed_run_id)));
+
   return (
     <div
       className={`px-5 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 border shadow-sm transition-all duration-300
@@ -87,6 +102,41 @@ export default function RunControlBar({
                   <>
                     {runnableSelectedCount} analyzable account{runnableSelectedCount === 1 ? "" : "s"} selected
                     {hasUnrunnableSelected ? " — Unknown / empty statements are skipped." : " — uncheck any you don't want included."}
+                  </>
+                ) : duplicateSelected.length > 0 && unknownSelected.length === 0 ? (
+                  <>
+                    {duplicateSelected.length === 1 ? "This statement matches" : "These statements match"}{" "}
+                    transactions that were already processed in a previous run — there's nothing new to
+                    analyze.{" "}
+                    {duplicateRunIds.length === 1 ? (
+                      <a
+                        href={`/analysis-history/row/${duplicateRunIds[0]}`}
+                        className="underline font-bold text-white hover:text-blue-100"
+                      >
+                        View that run →
+                      </a>
+                    ) : (
+                      <a
+                        href="/analysis-history"
+                        className="underline font-bold text-white hover:text-blue-100"
+                      >
+                        View analysis history →
+                      </a>
+                    )}
+                  </>
+                ) : duplicateSelected.length > 0 && unknownSelected.length > 0 ? (
+                  <>
+                    Some selected statement(s) are already-processed duplicates (
+                    {duplicateRunIds.length === 1 ? (
+                      <a href={`/analysis-history/row/${duplicateRunIds[0]}`} className="underline font-bold text-white hover:text-blue-100">
+                        view that run
+                      </a>
+                    ) : (
+                      <a href="/analysis-history" className="underline font-bold text-white hover:text-blue-100">
+                        view analysis history
+                      </a>
+                    )}
+                    ); others are unrecognised — configure any &ldquo;Unknown&rdquo; statements from the Config tab.
                   </>
                 ) : (
                   <>No recognised statements with pending rows. Configure any &ldquo;Unknown&rdquo; statements from the Config tab first.</>

@@ -42,6 +42,12 @@ export interface AccountGroup {
   ou_number: string;
   files: FileInfo[];
   pending_row_count: number;
+  // Set (by the backend) only when pending_row_count is 0 for a RECOGNISED
+  // account — i.e. every row seen from this account has already gone
+  // through a run. Lets the UI tell "genuinely unrecognised, go configure
+  // it" apart from "recognised, but this is a duplicate of an
+  // already-processed statement" and link straight to that run.
+  last_consumed_run_id?: number | null;
 }
 
 /**

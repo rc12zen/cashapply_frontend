@@ -73,7 +73,7 @@ export default function Dashboard() {
   // PATCH: account-level pending counts + which accounts are checked to be
   // included in the next run. Keyed by String(bank_account_id), or
   // "unresolved" for files whose account couldn't be determined at ingest.
-  const [pendingByAccount, setPendingByAccount] = useState<Record<string, { account_number: string | null; bank_name: string; pending_row_count: number }>>({});
+  const [pendingByAccount, setPendingByAccount] = useState<Record<string, { account_number: string | null; bank_name: string; pending_row_count: number; last_consumed_run_id?: number | null }>>({});
   // PATCH: tracks accounts the user has explicitly UNCHECKED (opt-out model).
   // Anything not in this set is included by default — including an account
   // that's never been seen before (e.g. just uploaded) — without needing to
@@ -167,10 +167,13 @@ export default function Dashboard() {
     try {
       const res = await getPendingByAccount();
       const accounts: any[] = res.data.accounts || [];
-      const byKey: Record<string, { account_number: string | null; bank_name: string; pending_row_count: number }> = {};
+      const byKey: Record<string, { account_number: string | null; bank_name: string; pending_row_count: number; last_consumed_run_id?: number | null }> = {};
       accounts.forEach((a) => {
         const key = a.bank_account_id != null ? String(a.bank_account_id) : "unresolved";
-        byKey[key] = { account_number: a.account_number, bank_name: a.bank_name, pending_row_count: a.pending_row_count };
+        byKey[key] = {
+          account_number: a.account_number, bank_name: a.bank_name,
+          pending_row_count: a.pending_row_count, last_consumed_run_id: a.last_consumed_run_id ?? null,
+        };
       });
       setPendingByAccount(byKey);
       // Nothing else to do here — deselectedAccountKeys is opt-out, so any
@@ -393,7 +396,7 @@ export default function Dashboard() {
   // in a fraction of a second — unreadable. Now each message is shown for its
   // full duration in turn, and an identical message that's already showing or
   // queued is de-duplicated (so a repeated "…is ready…" can't spam the bar).
-  const SUCCESS_MS = 3500;
+  const SUCCESS_MS = 6000;
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // null = idle
   const successQueueRef = useRef<string[]>([]);
   const currentSuccessRef = useRef<string>("");
@@ -442,6 +445,7 @@ export default function Dashboard() {
           ou_number: f.ou_number,
           files: [],
           pending_row_count: meta?.pending_row_count ?? 0,
+          last_consumed_run_id: meta?.last_consumed_run_id ?? null,
         });
       }
       map.get(key)!.files.push(f);
@@ -482,10 +486,18 @@ export default function Dashboard() {
       (g) => isAccountSelected(g.key) && isAccountRunnable(g),
     );
     if (runnableSelected.length === 0) {
+      const unrunnableSelected = accountGroups.filter(
+        (g) => isAccountSelected(g.key) && !isAccountRunnable(g),
+      );
+      const allDuplicates = unrunnableSelected.length > 0 &&
+        unrunnableSelected.every((g) => g.bank_account_id != null && g.last_consumed_run_id != null);
       setError(
-        "No analyzable statements selected. A statement must be recognised (its account " +
-        "configured) and have pending rows. Configure any 'Unknown' statements from the " +
-        "Config tab first.",
+        allDuplicates
+          ? "The selected statement(s) match transactions already processed in a previous run — " +
+            "there's nothing new to analyze. See the Analysis History tab for that run."
+          : "No analyzable statements selected. A statement must be recognised (its account " +
+            "configured) and have pending rows. Configure any 'Unknown' statements from the " +
+            "Config tab first.",
       );
       return;
     }
