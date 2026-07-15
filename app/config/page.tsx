@@ -1,14 +1,28 @@
 "use client";
-import { Database, Cpu, Loader2, Mail, Plus, RefreshCw, Save, ShieldAlert } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import { getFiles } from "@/lib/api";
-import { listAccounts } from "@/lib/configBuilderApi";
+import { Database, Cpu, Loader2, Mail, Plus, RefreshCw, Save, Search, ShieldAlert } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listAccounts, uploadBuilderFile } from "@/lib/configBuilderApi";
+import type { AccountSummary, FormatSummary } from "@/lib/configBuilderTypes";
 import ConfigBuilderWizard from "@/components/ConfigBuilderWizard";
 
 interface BankConfigEntry {
 	config_key: string;
 	display_name?: string;
-	formats?: string[];
+	bank?: string;
+	currency?: string;
+	formats: FormatSummary[];
+}
+
+// Server timestamps are UTC ISO strings ("2026-07-14T11:42:10Z"). Render as a
+// compact local date-time; fall back to the raw string if it can't be parsed.
+function fmtTimestamp(iso?: string): string {
+	if (!iso) return "";
+	const d = new Date(iso);
+	if (isNaN(d.getTime())) return iso;
+	return d.toLocaleString(undefined, {
+		year: "numeric", month: "short", day: "numeric",
+		hour: "2-digit", minute: "2-digit",
+	});
 }
 
 export default function ConfigPage() {
@@ -16,23 +30,69 @@ export default function ConfigPage() {
 	const [bankConfigs, setBankConfigs]       = useState<BankConfigEntry[]>([]);
 	const [configsLoading, setConfigsLoading] = useState(false);
 	const [wizardFile, setWizardFile]         = useState<string | null>(null);
-	const [pickerOpen, setPickerOpen]         = useState(false);
+	const [uploading, setUploading]           = useState(false);
 	const [configSuccess, setConfigSuccess]   = useState("");
+	const [configError, setConfigError]       = useState("");
+	const [search, setSearch]                 = useState("");
+	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	const fetchBankConfigs = useCallback(async () => {
 		setConfigsLoading(true);
 		try {
 			const res = await listAccounts();
-			setBankConfigs((res.data.accounts ?? []).map((a: any) => ({
+			setBankConfigs((res.data.accounts ?? []).map((a: AccountSummary) => ({
 				config_key: a.account_number,
 				display_name: a.display_name,
-				formats: a.formats,
+				bank: a.bank,
+				currency: a.currency,
+				formats: a.formats ?? [],
 			})));
 		} catch {}
 		finally { setConfigsLoading(false); }
 	}, []);
 
 	useEffect(() => { fetchBankConfigs(); }, [fetchBankConfigs]);
+
+	// "Add New Config" = upload the report directly here, then open the wizard on
+	// the returned filename. A new version is added by re-uploading + saving.
+	const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const file = e.target.files?.[0];
+		e.target.value = "";                       // allow re-selecting the same file
+		if (!file) return;
+		setConfigError("");
+		setUploading(true);
+		try {
+			const res = await uploadBuilderFile(file);
+			setWizardFile(res.data.filename);
+		} catch {
+			setConfigError("Upload failed. Please try again.");
+		} finally { setUploading(false); }
+	};
+
+	const q = search.trim().toLowerCase();
+	const filteredConfigs = q
+		? bankConfigs.filter((c) =>
+			c.config_key.toLowerCase().includes(q) ||
+			(c.display_name ?? "").toLowerCase().includes(q) ||
+			(c.bank ?? "").toLowerCase().includes(q))
+		: bankConfigs;
+
+	// Numbered pagination — only kicks in once the filtered list exceeds one
+	// page. Search filters the full set first (above), then we page the result.
+	const PAGE_SIZE = 10;
+	const [page, setPage] = useState(1);
+	const pageCount = Math.max(1, Math.ceil(filteredConfigs.length / PAGE_SIZE));
+	// Reset to page 1 whenever the search term changes.
+	useEffect(() => { setPage(1); }, [search]);
+	// Clamp if the current page falls out of range (e.g. after a reload shrinks the list).
+	const safePage = Math.min(page, pageCount);
+	const pagedConfigs = filteredConfigs.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+	// Frontend-only visibility toggle. The Matching Thresholds / Oracle Fusion /
+	// Notifications sections and the global "Save Config" bar are hidden for now —
+	// only Bank Statement Configs is shown. Flip to `true` to bring them back;
+	// all their state/handlers below are intentionally kept intact.
+	const SHOW_LEGACY_CONFIG_SECTIONS = false;
+
 	// --- WORKSPACE CONFIGURATION PARAMETER STATES ---
 	const [confidenceScore, setConfidenceScore] = useState(85);
 	const [bankChargesTolerance, setBankChargesTolerance] = useState(25.0);
@@ -60,11 +120,11 @@ export default function ConfigPage() {
 					Config
 				</h1>
 				<p className="text-xs text-gray-500 mt-0.5 font-medium">
-					Manage ingestion rules, automation matching tolerances, integration
-					environments, and message routing maps
+					Manage bank statement ingestion configs and their versions
 				</p>
 			</div>
 
+			{SHOW_LEGACY_CONFIG_SECTIONS && (<>
 			{saved && (
 				<div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-2.5 rounded-sm text-xs font-bold tracking-wide shadow-2xs">
 					✓ Parameters and rules synchronized successfully over active pipeline
@@ -227,6 +287,7 @@ export default function ConfigPage() {
 					<Save size={13} /> Save Config
 				</button>
 			</div>
+			</>)}
 
 			{/* BANK STATEMENT CONFIGS */}
 			<div className="bg-white border border-gray-200 rounded-sm shadow-xs overflow-hidden">
@@ -249,14 +310,46 @@ export default function ConfigPage() {
 						>
 							<RefreshCw size={13} className={configsLoading ? "animate-spin" : ""} />
 						</button>
+						<input
+							ref={fileInputRef}
+							type="file"
+							accept=".xlsx,.xls,.csv"
+							className="hidden"
+							onChange={handleFileChosen}
+						/>
 						<button
-							onClick={() => setPickerOpen(true)}
-							className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider bg-[#1E3A5F] hover:bg-[#2E6DA4] text-white px-3 py-1.5 rounded-sm cursor-pointer shadow-xs transition-colors"
+							onClick={() => fileInputRef.current?.click()}
+							disabled={uploading}
+							className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider bg-[#1E3A5F] hover:bg-[#2E6DA4] text-white px-3 py-1.5 rounded-sm cursor-pointer shadow-xs transition-colors disabled:opacity-50"
 						>
-							<Plus size={12} /> Add New Config
+							{uploading ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+							{uploading ? "Uploading…" : "Add New Config"}
 						</button>
 					</div>
 				</div>
+
+				{/* Search / filter */}
+				{bankConfigs.length > 0 && (
+					<div className="px-4 py-2.5 border-b border-gray-100">
+						<div className="relative max-w-sm">
+							<Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+							<input
+								type="text"
+								value={search}
+								onChange={(e) => setSearch(e.target.value)}
+								placeholder="Search account, bank or name…"
+								className="w-full bg-white border border-gray-300 rounded-sm text-xs text-primary pl-7 pr-3 py-1.5 outline-none focus:border-[#4A90E2]"
+							/>
+						</div>
+					</div>
+				)}
+
+				{configError && (
+					<div className="px-4 py-2 bg-red-50 border-b border-red-100 text-xs font-bold text-red-700">
+						{configError}
+					</div>
+				)}
+
 				{configsLoading ? (
 					<div className="flex items-center justify-center py-8 text-gray-400">
 						<Loader2 size={16} className="animate-spin mr-2" /> Loading…
@@ -265,29 +358,106 @@ export default function ConfigPage() {
 					<div className="px-4 py-6 text-xs text-gray-400 text-center">
 						No bank statement configs yet. Add one to enable auto-detection.
 					</div>
+				) : filteredConfigs.length === 0 ? (
+					<div className="px-4 py-6 text-xs text-gray-400 text-center">
+						No configs match “{search}”.
+					</div>
 				) : (
 					<div className="divide-y divide-gray-100">
-						{bankConfigs.map((c) => (
-							<div key={c.config_key} className="px-4 py-2.5 flex items-center justify-between gap-4">
-								<div>
+						{pagedConfigs.map((c) => (
+							<div key={c.config_key} className="px-4 py-3">
+								{/* Account header */}
+								<div className="flex items-baseline gap-2 flex-wrap">
 									<span className="text-xs font-bold text-primary font-mono">{c.config_key}</span>
 									{c.display_name && (
-										<span className="ml-2 text-[11px] text-gray-500">{c.display_name}</span>
+										<span className="text-[11px] text-gray-600 font-semibold">{c.display_name}</span>
+									)}
+									{(c.bank || c.currency) && (
+										<span className="text-[10px] text-gray-400">
+											{[c.bank, c.currency].filter(Boolean).join(" · ")}
+										</span>
 									)}
 								</div>
-								{c.formats && (
-									<div className="flex gap-1">
-										{c.formats.map((fmt) => (
-											<span key={fmt} className="text-[9px] font-black uppercase tracking-wide bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-xs">
-												{fmt}
-											</span>
-										))}
-									</div>
-								)}
+
+								{/* Per-format version lists */}
+								<div className="mt-2 space-y-2">
+									{c.formats.map((f) => (
+										<div key={f.format} className="border border-gray-100 rounded-sm bg-gray-50/50">
+											<div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-gray-100">
+												<span className="text-[9px] font-black uppercase tracking-wide bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-xs">
+													{f.format}
+												</span>
+												<span className="text-[10px] text-gray-400 font-medium">
+													{f.versions.length} version{f.versions.length === 1 ? "" : "s"}
+												</span>
+											</div>
+											<ul className="divide-y divide-gray-100">
+												{f.versions.map((v) => {
+													const isActive = v.version === f.active_version;
+													return (
+														<li key={v.version} className="flex items-center gap-2 px-2.5 py-1.5 text-[11px]">
+															<span className={`font-mono font-bold ${isActive ? "text-primary" : "text-gray-400"}`}>
+																v{v.version}
+															</span>
+															{isActive && (
+																<span className="text-[8px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-xs">
+																	Active
+																</span>
+															)}
+															<span className="text-gray-500">{fmtTimestamp(v.created_at)}</span>
+															{v.created_by && (
+																<span className="text-gray-400 ml-auto">added by {v.created_by}</span>
+															)}
+														</li>
+													);
+												})}
+											</ul>
+										</div>
+									))}
+								</div>
 							</div>
 						))}
 					</div>
 				)}
+
+				{/* Pagination — only shown once the filtered list exceeds one page */}
+				{!configsLoading && pageCount > 1 && (
+					<div className="flex items-center justify-between gap-2 px-4 py-2.5 border-t border-gray-100">
+						<span className="text-[10px] text-gray-400 font-medium">
+							Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredConfigs.length)} of {filteredConfigs.length}
+						</span>
+						<div className="flex items-center gap-1">
+							<button
+								onClick={() => setPage((p) => Math.max(1, p - 1))}
+								disabled={safePage <= 1}
+								className="text-[11px] font-bold text-gray-500 hover:text-primary px-2 py-1 rounded-sm disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+							>
+								Prev
+							</button>
+							{Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => (
+								<button
+									key={n}
+									onClick={() => setPage(n)}
+									className={`text-[11px] font-bold w-6 h-6 rounded-sm cursor-pointer ${
+										n === safePage
+											? "bg-[#1E3A5F] text-white"
+											: "text-gray-500 hover:bg-gray-100"
+									}`}
+								>
+									{n}
+								</button>
+							))}
+							<button
+								onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+								disabled={safePage >= pageCount}
+								className="text-[11px] font-bold text-gray-500 hover:text-primary px-2 py-1 rounded-sm disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+							>
+								Next
+							</button>
+						</div>
+					</div>
+				)}
+
 				{configSuccess && (
 					<div className="px-4 py-2 bg-emerald-50 border-t border-emerald-100 text-xs font-bold text-emerald-700">
 						✓ {configSuccess}
@@ -295,13 +465,14 @@ export default function ConfigPage() {
 				)}
 			</div>
 
-			{/* Config Builder Wizard — opened via "Add New Config" */}
-			{(wizardFile || pickerOpen) && (
+			{/* Config Builder Wizard — opened after "Add New Config" uploads a file.
+			    Saving appends a new version for the detected account + format. */}
+			{wizardFile && (
 				<ConfigBuilderWizard
-					filename={wizardFile ?? ""}
-					onClose={() => { setWizardFile(null); setPickerOpen(false); }}
+					filename={wizardFile}
+					onClose={() => setWizardFile(null)}
 					onSaved={(configKey) => {
-						setWizardFile(null); setPickerOpen(false);
+						setWizardFile(null);
 						setConfigSuccess(`Config '${configKey}' saved.`);
 						fetchBankConfigs();
 						setTimeout(() => setConfigSuccess(""), 4000);

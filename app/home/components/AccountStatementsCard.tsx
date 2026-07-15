@@ -1,7 +1,7 @@
 "use client";
 import { CheckCircle2, AlertTriangle, FileText, Loader2, Settings, UploadCloud, X } from "lucide-react";
 import type { RefObject } from "react";
-import type { AccountGroup, FileInfo } from "../types";
+import { type AccountGroup, type FileInfo, isAccountRunnable } from "../types";
 
 export interface DetectionInfo {
   config_key: string | null;
@@ -57,15 +57,28 @@ export default function AccountStatementsCard({
       {accountGroups.length > 0 ? (
         <div className="mt-3 pt-2 border-t border-gray-100 space-y-2.5 max-h-[220px] overflow-y-auto">
           {accountGroups.map((g) => {
-            const selected = isAccountSelected(g.key);
+            // Only recognised accounts with pending rows can be included in a
+            // run (see isAccountRunnable). An Unknown/errored/0-row statement's
+            // checkbox is disabled so it can't be selected into a no-op run.
+            const runnable = isAccountRunnable(g);
+            const selected = runnable && isAccountSelected(g.key);
+            const disabledReason = g.bank_account_id == null
+              ? "Configure this account (Config tab) before it can be analyzed"
+              : g.last_consumed_run_id != null
+                ? `All rows from this statement were already processed in run #${g.last_consumed_run_id} — this is a duplicate, nothing new to analyze`
+                : "No pending rows to analyze";
             return (
               <div key={g.key} className="border border-gray-200 rounded-xs overflow-hidden">
-                <label className="flex items-center gap-2 px-2 py-1.5 bg-gray-100/60 cursor-pointer select-none">
+                <label
+                  className={`flex items-center gap-2 px-2 py-1.5 bg-gray-100/60 select-none ${runnable ? "cursor-pointer" : "cursor-not-allowed opacity-70"}`}
+                  title={runnable ? undefined : disabledReason}
+                >
                   <input
                     type="checkbox"
                     checked={selected}
+                    disabled={!runnable}
                     onChange={() => toggleAccountSelected(g.key)}
-                    className="rounded-xs text-[#4A90E2] focus:ring-0 cursor-pointer"
+                    className="rounded-xs text-[#4A90E2] focus:ring-0 cursor-pointer disabled:cursor-not-allowed"
                   />
                   <span className="text-[10px] font-black text-primary uppercase tracking-wide truncate">
                     {g.bank_name}{g.account_number ? ` · ${g.account_number}` : ""}

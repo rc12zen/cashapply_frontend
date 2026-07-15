@@ -1,6 +1,6 @@
 "use client";
 import { ArrowRight, CheckCircle2, Play, RefreshCw, UploadCloud } from "lucide-react";
-import type { AccountGroup, FileInfo } from "../types";
+import { type AccountGroup, type FileInfo, isAccountRunnable } from "../types";
 
 interface RunControlBarProps {
   isRunning: boolean;
@@ -25,6 +25,27 @@ export default function RunControlBar({
   accountGroups, isAccountSelected, elapsedSeconds, fmtElapsed, onStart,
 }: RunControlBarProps) {
   const selectedCount = accountGroups.filter((g) => isAccountSelected(g.key)).length;
+  // Only recognised accounts with pending rows can actually be analyzed —
+  // an "Unknown"/0-row statement being checked must NOT enable the run.
+  const runnableSelectedCount = accountGroups.filter(
+    (g) => isAccountSelected(g.key) && isAccountRunnable(g),
+  ).length;
+  const hasUnrunnableSelected = selectedCount > runnableSelectedCount;
+
+  const selectedGroups = accountGroups.filter((g) => isAccountSelected(g.key));
+  // Of the selected-but-not-runnable accounts, split "genuinely unrecognised"
+  // (no bank_account_id — needs a Config tab fix) from "recognised, but every
+  // row we have from it was already consumed by an earlier run" (a re-upload
+  // of an already-processed statement — nothing wrong with the config, it's
+  // just a duplicate). These need different copy and the second one gets a
+  // direct link to the run that already processed it.
+  const unknownSelected = selectedGroups.filter(
+    (g) => !isAccountRunnable(g) && g.bank_account_id == null,
+  );
+  const duplicateSelected = selectedGroups.filter(
+    (g) => !isAccountRunnable(g) && g.bank_account_id != null && g.last_consumed_run_id != null,
+  );
+  const duplicateRunIds = Array.from(new Set(duplicateSelected.map((g) => g.last_consumed_run_id)));
 
   return (
     <div
@@ -74,11 +95,52 @@ export default function RunControlBar({
           ) : agingStatus.loaded && files.length > 0 ? (
             <div>
               <span className="font-bold text-sm tracking-wide text-white">
-                Ready for analysis
+                {runnableSelectedCount > 0 ? "Ready for analysis" : "Nothing to analyze"}
               </span>
               <p className="text-[10px] text-blue-100 mt-0.5">
-                {selectedCount} of {accountGroups.length} account{accountGroups.length === 1 ? "" : "s"} selected —
-                uncheck any you don't want included in this run.
+                {runnableSelectedCount > 0 ? (
+                  <>
+                    {runnableSelectedCount} analyzable account{runnableSelectedCount === 1 ? "" : "s"} selected
+                    {hasUnrunnableSelected ? " — Unknown / empty statements are skipped." : " — uncheck any you don't want included."}
+                  </>
+                ) : duplicateSelected.length > 0 && unknownSelected.length === 0 ? (
+                  <>
+                    {duplicateSelected.length === 1 ? "This statement matches" : "These statements match"}{" "}
+                    transactions that were already processed in a previous run — there's nothing new to
+                    analyze.{" "}
+                    {duplicateRunIds.length === 1 ? (
+                      <a
+                        href={`/analysis-history/row/${duplicateRunIds[0]}`}
+                        className="underline font-bold text-white hover:text-blue-100"
+                      >
+                        View that run →
+                      </a>
+                    ) : (
+                      <a
+                        href="/analysis-history"
+                        className="underline font-bold text-white hover:text-blue-100"
+                      >
+                        View analysis history →
+                      </a>
+                    )}
+                  </>
+                ) : duplicateSelected.length > 0 && unknownSelected.length > 0 ? (
+                  <>
+                    Some selected statement(s) are already-processed duplicates (
+                    {duplicateRunIds.length === 1 ? (
+                      <a href={`/analysis-history/row/${duplicateRunIds[0]}`} className="underline font-bold text-white hover:text-blue-100">
+                        view that run
+                      </a>
+                    ) : (
+                      <a href="/analysis-history" className="underline font-bold text-white hover:text-blue-100">
+                        view analysis history
+                      </a>
+                    )}
+                    ); others are unrecognised — configure any &ldquo;Unknown&rdquo; statements from the Config tab.
+                  </>
+                ) : (
+                  <>No recognised statements with pending rows. Configure any &ldquo;Unknown&rdquo; statements from the Config tab first.</>
+                )}
               </p>
             </div>
           ) : (
@@ -93,7 +155,7 @@ export default function RunControlBar({
         onClick={onStart}
         disabled={
           isRunning || loading || files.length === 0 || !agingStatus.loaded || filesAlreadyAnalyzed ||
-          selectedCount === 0
+          runnableSelectedCount === 0
         }
         className={`w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 font-bold text-xs uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-xs whitespace-nowrap cursor-pointer
       ${

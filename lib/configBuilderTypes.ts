@@ -120,6 +120,26 @@ export interface SaveRecipePayload {
   // if omitted. See db config_builder_routes.py's SaveRecipeRequest.
   functional_currency?: string;
   source_filename?: string;              // statement file the config was built from (audit log)
+  // Best-effort author of this version (login_user_email_stub cookie), read
+  // and passed explicitly by the wizard since configBuilderApi's axios has no
+  // dev-user interceptor. Shown as "added by"; omitted if unknown.
+  created_by?: string;
+}
+
+// One saved version of a recipe (metadata only — the recipe body is not carried
+// in the account list; display is metadata-only).
+export interface ConfigVersion {
+  version: number;
+  created_at: string;
+  created_by?: string;
+}
+
+// Per-format summary returned by GET /builder/accounts: the full version list
+// (newest first) plus which version is active (latest = wins at detection).
+export interface FormatSummary {
+  format: string;
+  active_version: number;
+  versions: ConfigVersion[];
 }
 
 export interface AccountSummary {
@@ -128,5 +148,5 @@ export interface AccountSummary {
   display_name: string;
   bank?: string;
   currency?: string;
-  formats: string[];
+  formats: FormatSummary[];
 }
