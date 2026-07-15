@@ -153,10 +153,11 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   // free-typing an OU number that might not exist.
   const [availableOUs, setAvailableOUs] = useState<{ ou_number: string; business_unit: string | null }[]>([]);
   const [ousLoading, setOusLoading]     = useState(true);
+  const [ousError, setOusError]         = useState("");
   useEffect(() => {
     getAvailableOUs()
       .then((res) => setAvailableOUs(res.data?.ous ?? []))
-      .catch(() => setAvailableOUs([]))
+      .catch((e) => { setAvailableOUs([]); setOusError(getErrorMessage(e, "Could not load Organization Units.")); })
       .finally(() => setOusLoading(false));
   }, []);
 
@@ -571,7 +572,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   accountNumber, existingFormats,
                   extension: previewData?.extension ?? "xlsx",
                   saving, saveError,
-                  availableOUs, ousLoading,
+                  availableOUs, ousLoading, ousError,
                 }} />
               )}
             </>
@@ -1647,7 +1648,7 @@ function StepSave({
   accountNumber, existingFormats,
   extension,
   saving, saveError,
-  availableOUs, ousLoading,
+  availableOUs, ousLoading, ousError,
 }: {
   displayName: string; setDisplayName: (v: string) => void;
   bank: string; setBank: (v: string) => void;
@@ -1661,6 +1662,7 @@ function StepSave({
   saving: boolean; saveError: string;
   availableOUs: { ou_number: string; business_unit: string | null }[];
   ousLoading: boolean;
+  ousError: string;
 }) {
   const exists = existingFormats[accountNumber];
   const selectedOU = availableOUs.find((o) => o.ou_number === ouNumber);
@@ -1713,6 +1715,10 @@ function StepSave({
           {ousLoading ? (
             <div className="text-xs text-gray-400 flex items-center gap-1.5 px-3 py-2">
               <Loader2 size={12} className="animate-spin" /> Loading OUs…
+            </div>
+          ) : ousError ? (
+            <div className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded-sm px-3 py-2">
+              Couldn't load Organization Units: {ousError}
             </div>
           ) : availableOUs.length === 0 ? (
             <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2">
