@@ -30,6 +30,15 @@ export const testBuilderDraft = (storage_key: string, config_draft: object) =>
 export const saveRecipe = (payload: SaveRecipePayload) =>
   API.post("/api/config/builder/save", payload);
 
+// OU/BU picklist for the wizard's OU step — known OUs (already onboarded)
+// plus OU numbers seen in the currently loaded aging report that aren't
+// onboarded yet (business_unit: null for those, so the wizard prompts for
+// the name once).
+export const getAvailableOUs = () =>
+  API.get<{ ous: { ou_number: string; business_unit: string | null; functional_currency: string | null; known: boolean }[] }>(
+    "/api/config/builder/available-ous"
+  );
+
 // ── Account management (Manage dialog + Clone-from-existing) ──────────────────
 export const listAccounts = () => API.get("/api/config/builder/accounts");
 

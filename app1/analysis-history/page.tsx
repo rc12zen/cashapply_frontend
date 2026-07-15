@@ -67,7 +67,6 @@ import {
   getRunHistory, getRunHistoryFilterOptions, getRunSummary, approveEntry, rejectEntry, approveBulk,
   getFilterOptions, getFilePreview, getAgingPreview, retryOracle, getBreakupAnalysis,
 } from "@/lib/api";
-import { getErrorMessage } from "@/lib/errorMessage";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -503,7 +502,7 @@ function AnalysisHistoryPageInner() {
       await approveEntry(item.id, undefined, breakup);
       if (viewingRun) await loadRunDetail(viewingRun);
     } catch (e: any) {
-      setRowError(item.id, getErrorMessage(e, "Approve failed."));
+      setRowError(item.id, e?.response?.data?.detail || "Approve failed.");
     }
     setActionLoading((p) => ({ ...p, [item.id]: false }));
   };
@@ -516,7 +515,7 @@ function AnalysisHistoryPageInner() {
       setBreakupLine(null); setBreakupAnalysis(null);
       if (viewingRun) await loadRunDetail(viewingRun);
     } catch (e: any) {
-      setRowError(breakupLine.id, getErrorMessage(e, "Approve failed."));
+      setRowError(breakupLine.id, e?.response?.data?.detail || "Approve failed.");
       setBreakupLine(null); setBreakupAnalysis(null);
     }
     setBreakupPosting(false);
@@ -529,7 +528,7 @@ function AnalysisHistoryPageInner() {
       await rejectEntry(item.id);
       if (viewingRun) await loadRunDetail(viewingRun);
     } catch (e: any) {
-      setRowError(item.id, getErrorMessage(e, "Reject failed."));
+      setRowError(item.id, e?.response?.data?.detail || "Reject failed.");
     }
     setActionLoading((p) => ({ ...p, [item.id]: false }));
   };

@@ -3,7 +3,6 @@ import { Loader2, Plus, RefreshCw, Search, ShieldCheck, UserPlus, X } from "luci
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getMe, getRoles, getUsers, onboardUser, setUserActive, updateUser } from "@/lib/api";
-import { getErrorMessage } from "@/lib/errorMessage";
 
 interface UserRow {
 	id: number;
@@ -140,7 +139,7 @@ export default function UsersPage() {
 			setFormEmail(""); setFormName(""); setFormRole("");
 			fetchAll();
 		} catch (err: any) {
-			setError(getErrorMessage(err, "Could not onboard user."));
+			setError(err?.response?.data?.detail || "Could not onboard user.");
 		} finally {
 			setSaving(false);
 		}
@@ -154,7 +153,7 @@ export default function UsersPage() {
 			showSuccess(`Updated ${u.email} → ${roleName}.`);
 			fetchAll();
 		} catch (err: any) {
-			showError(getErrorMessage(err, "Could not change role."));
+			showError(err?.response?.data?.detail || "Could not change role.");
 		} finally {
 			setBusyId(null);
 		}
@@ -167,7 +166,7 @@ export default function UsersPage() {
 			showSuccess(`${u.is_active ? "Deactivated" : "Reactivated"} ${u.email}.`);
 			fetchAll();
 		} catch (err: any) {
-			showError(getErrorMessage(err, "Could not update user."));
+			showError(err?.response?.data?.detail || "Could not update user.");
 		} finally {
 			setBusyId(null);
 		}

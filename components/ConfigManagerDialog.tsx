@@ -8,6 +8,7 @@
 import { AlertCircle, Database, Loader2, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { deleteAccount, deleteRecipe, listAccounts } from "@/lib/configBuilderApi";
+import { getErrorMessage } from "@/lib/errorMessage";
 import type { AccountSummary } from "@/lib/configBuilderTypes";
 
 export default function ConfigManagerDialog({ onClose }: { onClose: () => void }) {
@@ -34,14 +35,14 @@ export default function ConfigManagerDialog({ onClose }: { onClose: () => void }
   const removeAccount = async (acct: string) => {
     setBusy(acct); setError("");
     try { await deleteAccount(acct); setConfirm(null); await load(); }
-    catch (e: any) { setError(e?.response?.data?.detail || "Delete failed."); }
+    catch (e: any) { setError(getErrorMessage(e, "Delete failed.")); }
     finally { setBusy(null); }
   };
 
   const removeRecipe = async (acct: string, fmt: string) => {
     setBusy(`${acct}:${fmt}`); setError("");
     try { await deleteRecipe(acct, fmt); await load(); }
-    catch (e: any) { setError(e?.response?.data?.detail || "Delete failed."); }
+    catch (e: any) { setError(getErrorMessage(e, "Delete failed.")); }
     finally { setBusy(null); }
   };
 

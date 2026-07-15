@@ -105,7 +105,6 @@ export default function AccountStatementsCard({
                     // "Unknown") whenever there's no in-session detection
                     // info to use instead.
                     const hasError = f.ingest_status === "error";
-                    const isUnrecognized = f.ingest_status === "unrecognized";
                     const isUnknown = det
                       ? (!det.config_key && !isAmbiguous)
                       : (!f.bank_name || f.bank_name === "Unknown") && f.ingest_status !== "ready";
@@ -113,7 +112,7 @@ export default function AccountStatementsCard({
                       <div
                         key={f.filename}
                         className={`flex items-center justify-between text-[11px] border rounded-xs px-2 py-1.5 gap-2 ${
-                          isUnknown || isAmbiguous || hasError || isUnrecognized ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"
+                          isUnknown || isAmbiguous || hasError ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"
                         }`}
                       >
                         <div className="flex items-center gap-1.5 min-w-0">
@@ -140,16 +139,8 @@ export default function AccountStatementsCard({
                               <CheckCircle2 size={9} /> Ready ({f.new_row_count ?? 0} new)
                             </span>
                           ) : f.ingest_status === "error" ? (
-                            // A real failure — a config DID match, something else broke
-                            // (OU not mapped, an unexpected exception mid-parse, ...).
                             <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-xs" title={f.ingest_error || "Ingestion failed — see server logs"}>
                               <AlertTriangle size={9} /> Error
-                            </span>
-                          ) : isUnrecognized ? (
-                            // No config matched at all — an expected, everyday state,
-                            // not a failure. Deliberately NOT styled like Error.
-                            <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs" title="No account configuration matches this statement yet">
-                              Needs Config
                             </span>
                           ) : null}
                           {isAmbiguous ? (
@@ -160,7 +151,7 @@ export default function AccountStatementsCard({
                             <button onClick={() => onOpenResolveForFile(f.filename, "reconfigure")} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title={f.ingest_error || "Ingestion failed — test the matched config, or build a new one"}>
                               <Settings size={10} /> Reconfigure
                             </button>
-                          ) : isUnrecognized || isUnknown ? (
+                          ) : isUnknown ? (
                             <button onClick={() => onOpenWizardForFile(f.filename)} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title="Open Config Builder">
                               <Settings size={10} /> Configure
                             </button>

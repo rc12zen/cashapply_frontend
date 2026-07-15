@@ -239,6 +239,18 @@ export const getRunSummary = (runId: number) =>
 export const getRowDetail = (recordId: number) =>
   API.get(`/api/results/row-detail/${recordId}`);
 
+/**
+ * Fetches a storage-backed file (e.g. the original remittance email
+ * App2/cashapply-remittance-agent archived) as a blob, going through the
+ * same authenticated axios instance as every other call — a plain <a href>
+ * straight to the backend URL would skip the X-Dev-User header this app's
+ * auth relies on (see the interceptor above) and 401. Callers turn the
+ * blob into an object URL and trigger a save themselves (same pattern as
+ * exportExecutiveCsv).
+ */
+export const downloadStorageFile = (relativeUrl: string) =>
+  API.get(relativeUrl, { responseType: "blob" });
+
 export const getNotFound           = (params?: object) => API.get("/api/results/not-found", { params });
 export const getValidationFailures = ()                => API.get("/api/results/validation-failures");
 
@@ -302,6 +314,7 @@ export const getActivityLog = (params: {
 
 // Distinct user emails present in the audit trail — for the user filter dropdown.
 export const getActivityUsers = () => API.get("/api/activity-log/users");
+export const purgeSystemLogs  = () => API.delete("/api/activity-log/purge-system-logs");
 
 // ── HITL ──────────────────────────────────────────────────────────────────────
 export const getPendingHitl     = ()                             => API.get("/api/hitl/pending");

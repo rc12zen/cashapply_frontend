@@ -19,7 +19,6 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type React from "react";
 import { getActivityLog, getActivityUsers, purgeSystemLogs } from "@/lib/api";
-import { getErrorMessage } from "@/lib/errorMessage";
 
 // --- LOG SYSTEM SCHEMA — mirrors bff/activity_log_routes.py's response ---
 interface ActivityLogEntry {
@@ -189,7 +188,7 @@ export default function ActivityLogPage() {
 			setPurgeMsg(`Removed ${res.data.deleted_count.toLocaleString()} old log entries.`);
 			load(page);
 		} catch (e: any) {
-			setPurgeMsg(getErrorMessage(e, "Could not clear old logs — you may need admin access."));
+			setPurgeMsg(e?.response?.data?.detail || "Could not clear old logs — you may need admin access.");
 		}
 		setPurging(false);
 		setTimeout(() => setPurgeMsg(""), 6000);

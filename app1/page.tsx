@@ -11,7 +11,6 @@ import { useRouter } from "next/navigation";
 import type React from "react";
 import { useState } from "react";
 import { getMe } from "@/lib/api";
-import { getErrorMessage } from "@/lib/errorMessage";
 
 export default function LoginScreen() {
 	const router = useRouter();
@@ -57,9 +56,9 @@ export default function LoginScreen() {
 			// Clear the cookie we just set — it's not a valid dev-bypass
 			// identity, so don't leave it sitting there for the next request.
 			document.cookie = "login_user_email_stub=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
-			const message = getErrorMessage(err, "");
+			const detail = err?.response?.data?.detail;
 			setError(
-				message ||
+				detail ||
 				"That email isn't recognized. For local/test access it must be a seeded dev-bypass user (see README_SETUP_AND_TESTING.md)."
 			);
 		} finally {

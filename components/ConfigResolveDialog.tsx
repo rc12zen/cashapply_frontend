@@ -12,6 +12,7 @@
 import { AlertCircle, Check, FileText, Loader2, Play, Plus, X } from "lucide-react";
 import { useState } from "react";
 import { testExistingConfig } from "@/lib/configBuilderApi";
+import { getErrorMessage } from "@/lib/errorMessage";
 
 interface Candidate {
   config_key: string;        // account number
@@ -41,7 +42,7 @@ export default function ConfigResolveDialog({ filename, candidates, mode, onBuil
       const res = await testExistingConfig(filename, c.config_key, c.format);
       setTests((p) => ({ ...p, [c.config_key]: { loading: false, ...res.data } }));
     } catch (e: any) {
-      setTests((p) => ({ ...p, [c.config_key]: { loading: false, success: false, error: e?.response?.data?.detail || "Test failed" } }));
+      setTests((p) => ({ ...p, [c.config_key]: { loading: false, success: false, error: getErrorMessage(e, "Test failed") } }));
     }
   };
 

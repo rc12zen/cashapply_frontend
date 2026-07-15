@@ -113,8 +113,8 @@ export interface SaveRecipePayload {
   recipe: object;                        // account_locator + source + fields + credit_rule + …
   bank?: string;
   currency?: string;
-  ou_number?: string;
-  business_unit?: string;
+  ou_number: string;
+  business_unit: string;
   // Ledger/functional currency for this OU — only used if ou_number is
   // genuinely new (see backend's builder_save); falls back to `currency`
   // if omitted. See db config_builder_routes.py's SaveRecipeRequest.

@@ -46,7 +46,6 @@ import {deleteFile,
   uploadStatement,
 } from "@/lib/api";
 import { detectForFile } from "@/lib/configBuilderApi";
-import { getErrorMessage } from "@/lib/errorMessage";
 import {
   getAiUsageSummary,
   getAiUsageTotals,
@@ -143,15 +142,6 @@ export default function Dashboard() {
   // "Download CSV" button so the export matches what's on screen.
   const [aiScope, setAiScope] = useState<{ runId?: number; dateFrom?: string; dateTo?: string }>({});
   const [successMessage, setSuccessMessage]   = useState("");
-  // Persistent (no auto-dismiss) notice for "needs configuration" uploads —
-  // separate from the success toast queue below, which is for transient
-  // confirmations and disappears after SUCCESS_MS. This is actionable and
-  // should stay visible until the person dismisses it or resolves it.
-  // Persistent (no auto-dismiss) confirmation for restore/retry — these used
-  // to be transient success toasts, which is why they were "disappearing in
-  // seconds"; this is informational and worth leaving up until dismissed.
-  const [uploadNotice, setUploadNotice] = useState("");
-  const [configNeededNotice, setConfigNeededNotice] = useState("");
 
   // PATCH: completion banner now reports the new taxonomy too.
   const [runCompletionSummary, setRunCompletionSummary] = useState<{
@@ -309,7 +299,7 @@ export default function Dashboard() {
       await fetchAgingHistory();
       showSuccess(`Loaded aging snapshot "${res.data.filename}".`);
     } catch (e: any) {
-      setError(getErrorMessage(e, "Failed to load that aging snapshot."));
+      setError(e?.response?.data?.detail || "Failed to load that aging snapshot.");
     }
     setAgingSwitching(false);
   };
@@ -520,7 +510,7 @@ export default function Dashboard() {
       prevRunStatus.current = "running";
       fetchStatus();
     } catch (e: any) {
-      setError(getErrorMessage(e, "Failed to start analysis"));
+      setError(e?.response?.data?.detail || "Failed to start analysis");
     }
     setLoading(false);
   };
@@ -556,16 +546,6 @@ export default function Dashboard() {
         } else if (ingest_status === "error") {
           clearInterval(interval);
           setError(ingest_error || `Failed to process "${filename}".`);
-        } else if (ingest_status === "unrecognized") {
-          // Not a failure — no config matches this statement yet. Stop
-          // polling (nothing will change until someone configures it), and
-          // surface the persistent (non-auto-dismissing) notice — this is
-          // the path a RETRIED upload of an already-unresolved file takes,
-          // where the only other feedback so far was a transient toast.
-          clearInterval(interval);
-          setConfigNeededNotice(
-            ingest_error || `"${filename}" still has no matching config — click Configure to set it up.`
-          );
         }
       } catch {
         // transient — keep polling until attempts run out
@@ -576,7 +556,7 @@ export default function Dashboard() {
 
   const handleStatementUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
-    setStatementUploading(true); setError(""); setDuplicateUploadInfo(null); setConfigNeededNotice(""); setUploadNotice("");
+    setStatementUploading(true); setError(""); setDuplicateUploadInfo(null);
     try {
       const res = await uploadStatement(file);
       const data = res.data ?? {};
@@ -603,7 +583,7 @@ export default function Dashboard() {
         // page. Now polls the same as a brand-new upload.
         await fetchFiles();
         await fetchPendingByAccount();
-        setUploadNotice(
+        showSuccess(
           data.message ||
             (data.restored
               ? `"${file.name}" restored to your Account Statements list.`
@@ -648,15 +628,15 @@ export default function Dashboard() {
       await fetchFilterOptions();
       if (ambiguous) {
         setResolveState({ filename: file.name, candidates: candidates ?? [], mode: "ambiguous" });
-        setConfigNeededNotice(`"${file.name}" uploaded — multiple configs match. Choose the correct one.`);
+        showSuccess(`"${file.name}" uploaded — multiple configs match. Choose the correct one.`);
       } else if (warning) {
-        setConfigNeededNotice(`"${file.name}" uploaded. Bank format not detected — click Configure to set it up.`);
+        showSuccess(`"${file.name}" uploaded. Bank format not detected — click Configure to set it up.`);
       } else {
         showSuccess(`Statement "${file.name}" uploaded. Processing...`);
       }
-      if (source_file_id && data.ingest_status === "processing") pollIngestStatus(source_file_id, file.name);
+      if (source_file_id) pollIngestStatus(source_file_id, file.name);
     } catch (err: any) {
-      setError(getErrorMessage(err, "Statement upload failed."));
+      setError(err?.response?.data?.detail || "Statement upload failed.");
     } finally {
       setStatementUploading(false);
       if (statementInputRef.current) statementInputRef.current.value = "";
@@ -687,7 +667,8 @@ export default function Dashboard() {
       showSuccess(`"${filename}" removed from the next run.`);
     } catch (e: any) {
       setError(
-        getErrorMessage(e, `Failed to remove "${filename}". Check that your account has permission to modify statements.`)
+        e?.response?.data?.detail ||
+        `Failed to remove "${filename}". Check that your account has permission to modify statements.`
       );
     }
   };
@@ -738,8 +719,6 @@ export default function Dashboard() {
 					duplicateUploadInfo={duplicateUploadInfo} setDuplicateUploadInfo={setDuplicateUploadInfo}
 					successMessage={successMessage} setSuccessMessage={setSuccessMessage} successTimerRef={successTimerRef}
 					runCompletionSummary={runCompletionSummary} setRunCompletionSummary={setRunCompletionSummary}
-					configNeededNotice={configNeededNotice} setConfigNeededNotice={setConfigNeededNotice}
-					uploadNotice={uploadNotice} setUploadNotice={setUploadNotice}
 				/>
 
 				{/* UPLOADS */}
@@ -833,7 +812,6 @@ export default function Dashboard() {
 						onSaved={(configKey) => {
 							const fn = wizardFile;
 							setWizardFile(null);
-							setConfigNeededNotice("");
 							setDetectionInfo((prev) => ({
 								...prev,
 								[fn]: { config_key: configKey, warning: null, ambiguous: false },

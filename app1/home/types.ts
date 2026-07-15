@@ -21,7 +21,7 @@ export interface FileInfo {
   bank_account_id?: number | null;
   // ── Duplicate detection / ingestion status (additive) ────────────────────
   source_file_id?:      number;
-  ingest_status?:       "processing" | "ready" | "error" | "unrecognized" | null;
+  ingest_status?:       "processing" | "ready" | "error" | null;
   ingest_error?:        string | null;
   new_row_count?:        number | null;
   duplicate_row_count?:  number | null;

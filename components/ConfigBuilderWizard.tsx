@@ -19,7 +19,8 @@ import {
   ChevronRight, Eye, Info, Loader2, MousePointerClick, Play, Plus, Save, TableProperties, X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getBuilderRawPreview, locateAccount, saveRecipe, testBuilderDraft } from "@/lib/configBuilderApi";
+import { getBuilderRawPreview, locateAccount, saveRecipe, testBuilderDraft, getAvailableOUs } from "@/lib/configBuilderApi";
+import { getErrorMessage } from "@/lib/errorMessage";
 import type {
   AccountLocator, BuilderTestResult, CreditRuleConfig, ExclusionRule,
   FieldSource, LogicalField, MergeRule, RawPreviewData,
@@ -146,6 +147,18 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const [functionalCurrency, setFunctionalCurrency] = useState("");
   const [saving, setSaving]               = useState(false);
   const [saveError, setSaveError]         = useState("");
+
+  // OU/BU picklist — known OUs + OU numbers seen in the currently loaded
+  // aging report. Fetched once; the OU step picks from this instead of
+  // free-typing an OU number that might not exist.
+  const [availableOUs, setAvailableOUs] = useState<{ ou_number: string; business_unit: string | null }[]>([]);
+  const [ousLoading, setOusLoading]     = useState(true);
+  useEffect(() => {
+    getAvailableOUs()
+      .then((res) => setAvailableOUs(res.data?.ous ?? []))
+      .catch(() => setAvailableOUs([]))
+      .finally(() => setOusLoading(false));
+  }, []);
 
   // ── Load raw preview on mount ─────────────────────────────────────────────────
   useEffect(() => {
@@ -287,7 +300,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       const res = await testBuilderDraft(previewData.storage_key, draft);
       setTestResult(res.data);
     } catch (e: any) {
-      setTestResult({ success: false, error: e?.response?.data?.detail || String(e), row_count: 0, rows: [] });
+      setTestResult({ success: false, error: getErrorMessage(e, String(e)), row_count: 0, rows: [] });
     } finally {
       setTestLoading(false);
     }
@@ -307,7 +320,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       else if (accts.length > 1 && !accts.includes(accountNumber)) setAccountNumber("");
       if (accts.length === 0) setLocateError("No account number found with this rule — adjust and try again.");
     } catch (e: any) {
-      setLocateError(e?.response?.data?.detail || "Could not read the account. Adjust the rule and retry.");
+      setLocateError(getErrorMessage(e, "Could not read the account. Adjust the rule and retry."));
     } finally {
       setLocating(false);
     }
@@ -331,14 +344,14 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         recipe,
         bank: bank.trim() || undefined,
         currency: currency.trim() || undefined,
-        ou_number: ouNumber.trim() || undefined,
-        business_unit: businessUnit.trim() || undefined,
+        ou_number: ouNumber.trim(),
+        business_unit: businessUnit.trim(),
         functional_currency: functionalCurrency.trim() || undefined,
         created_by: readLoginStub(),
       });
       onSaved(accountNumber.trim());
     } catch (e: any) {
-      setSaveError(e?.response?.data?.detail || "Save failed. Please try again.");
+      setSaveError(getErrorMessage(e, "Save failed. Please try again."));
     } finally {
       setSaving(false);
     }
@@ -558,6 +571,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   accountNumber, existingFormats,
                   extension: previewData?.extension ?? "xlsx",
                   saving, saveError,
+                  availableOUs, ousLoading,
                 }} />
               )}
             </>
@@ -1633,6 +1647,7 @@ function StepSave({
   accountNumber, existingFormats,
   extension,
   saving, saveError,
+  availableOUs, ousLoading,
 }: {
   displayName: string; setDisplayName: (v: string) => void;
   bank: string; setBank: (v: string) => void;
@@ -1644,8 +1659,21 @@ function StepSave({
   existingFormats: Record<string, string[]>;
   extension: string;
   saving: boolean; saveError: string;
+  availableOUs: { ou_number: string; business_unit: string | null }[];
+  ousLoading: boolean;
 }) {
   const exists = existingFormats[accountNumber];
+  const selectedOU = availableOUs.find((o) => o.ou_number === ouNumber);
+  const isKnownOU = !!selectedOU?.business_unit;
+
+  const handleOuChange = (value: string) => {
+    setOuNumber(value);
+    const match = availableOUs.find((o) => o.ou_number === value);
+    // Known OU -> auto-fill its Business Unit name. New OU (from the aging
+    // report, not yet onboarded) -> clear it so the person names it once.
+    setBusinessUnit(match?.business_unit || "");
+  };
+
   return (
     <div className="space-y-4 max-w-lg">
       <div>
@@ -1681,14 +1709,36 @@ function StepSave({
             className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#4A90E2]" />
         </div>
         <div className="space-y-1.5">
-          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">OU Number <span className="text-red-500">*</span></label>
-          <input type="text" placeholder="e.g. 111" value={ouNumber} onChange={(e) => setOuNumber(e.target.value)}
-            className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#4A90E2]" />
+          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">Organization Unit <span className="text-red-500">*</span></label>
+          {ousLoading ? (
+            <div className="text-xs text-gray-400 flex items-center gap-1.5 px-3 py-2">
+              <Loader2 size={12} className="animate-spin" /> Loading OUs…
+            </div>
+          ) : availableOUs.length === 0 ? (
+            <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2">
+              No OUs available yet — load an aging report first so its Organization Units show up here.
+            </div>
+          ) : (
+            <select value={ouNumber} onChange={(e) => handleOuChange(e.target.value)}
+              className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#4A90E2] bg-white">
+              <option value="">Select an OU…</option>
+              {availableOUs.map((o) => (
+                <option key={o.ou_number} value={o.ou_number}>
+                  {o.ou_number}{o.business_unit ? ` — ${o.business_unit}` : " — (new, not yet onboarded)"}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
         <div className="space-y-1.5">
-          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">Business Unit <span className="text-red-500">*</span></label>
-          <input type="text" placeholder="e.g. SoCal BU" value={businessUnit} onChange={(e) => setBusinessUnit(e.target.value)}
-            className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#4A90E2]" />
+          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">
+            Business Unit <span className="text-red-500">*</span>
+            {isKnownOU && <span className="text-gray-400 font-normal normal-case"> (from OU record)</span>}
+          </label>
+          <input type="text" placeholder="e.g. SoCal BU" value={businessUnit}
+            onChange={(e) => setBusinessUnit(e.target.value)}
+            readOnly={isKnownOU}
+            className={`w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#4A90E2] ${isKnownOU ? "bg-gray-50 text-gray-500" : ""}`} />
         </div>
         <div className="space-y-1.5">
           <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">
@@ -1700,7 +1750,7 @@ function StepSave({
       </div>
 
       <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
-        <Info size={11} /> OU / Business Unit map this account to its operating unit for row matching (stored in bank_ou_mapping.json). Only set Functional Currency if OU {ouNumber || "…"} is genuinely new — if it already exists, its current currency is kept as-is. File type: <span className="font-mono">{extension}</span>.
+        <Info size={11} /> Organization Unit and Business Unit are a required relationship for this account — chosen from your Organization Units, not free-typed. Only set Functional Currency if OU {ouNumber || "…"} is genuinely new — if it already exists, its current currency is kept as-is. File type: <span className="font-mono">{extension}</span>.
       </div>
 
       {saving && (

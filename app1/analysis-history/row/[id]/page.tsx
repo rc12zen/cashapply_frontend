@@ -42,14 +42,16 @@ import {
   downloadStorageFile,
 } from "@/lib/api";
 
-import { getErrorMessage } from "@/lib/errorMessage";
-
-// The backend now normalizes every error (including FastAPI's own 422
-// validation errors) into { title, message } server-side — see
-// app/common/errors.py. This just delegates to the shared helper; kept as
-// a named wrapper so call sites below didn't all need renaming.
+// FastAPI validation errors (422) return detail as an array of
+// {type, loc, msg, input} objects — never render that directly as a
+// React child. Normalize any error shape down to a plain string.
 function formatApiError(e: any, fallback = "Action failed."): string {
-  return getErrorMessage(e, fallback);
+  const detail = e?.response?.data?.detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d: any) => d?.msg ?? JSON.stringify(d)).join("; ") || fallback;
+  }
+  if (typeof detail === "string" && detail.trim()) return detail;
+  return e?.message || fallback;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────

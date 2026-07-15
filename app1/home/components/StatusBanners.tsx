@@ -27,10 +27,6 @@ interface StatusBannersProps {
   successTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
   runCompletionSummary: RunCompletionSummary | null;
   setRunCompletionSummary: (v: RunCompletionSummary | null) => void;
-  configNeededNotice: string;
-  setConfigNeededNotice: (v: string) => void;
-  uploadNotice: string;
-  setUploadNotice: (v: string) => void;
 }
 
 /**
@@ -45,8 +41,6 @@ export default function StatusBanners({
   duplicateUploadInfo, setDuplicateUploadInfo,
   successMessage, setSuccessMessage, successTimerRef,
   runCompletionSummary, setRunCompletionSummary,
-  configNeededNotice, setConfigNeededNotice,
-  uploadNotice, setUploadNotice,
 }: StatusBannersProps) {
   return (
     <>
@@ -59,41 +53,6 @@ export default function StatusBanners({
           </div>
           <button
             onClick={() => setError("")}
-            className="text-gray-400 hover:text-gray-600 px-2"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* UPLOAD INFO — restore/retry confirmations. Persists until dismissed;
-          these used to be transient toasts, which is why they disappeared
-          in seconds. */}
-      {uploadNotice && (
-        <div className="bg-blue-50 border-l-4 border-blue-500 text-gray-900 px-4 py-3.5 shadow-sm text-sm flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <CheckCircle2 size={18} className="text-blue-500 shrink-0" />
-            <span className="font-medium">{uploadNotice}</span>
-          </div>
-          <button
-            onClick={() => setUploadNotice("")}
-            className="text-gray-400 hover:text-gray-600 px-2"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* NEEDS CONFIGURATION — actionable, persists until dismissed or resolved
-          (not routed through the success toast queue, which auto-dismisses) */}
-      {configNeededNotice && (
-        <div className="bg-amber-50 border-l-4 border-amber-500 text-gray-900 px-4 py-3.5 shadow-sm text-sm flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <AlertTriangle size={18} className="text-amber-500 shrink-0" />
-            <span className="font-medium">{configNeededNotice}</span>
-          </div>
-          <button
-            onClick={() => setConfigNeededNotice("")}
             className="text-gray-400 hover:text-gray-600 px-2"
           >
             ×
