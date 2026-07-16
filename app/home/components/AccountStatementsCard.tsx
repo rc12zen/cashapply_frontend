@@ -57,7 +57,7 @@ export default function AccountStatementsCard({
           className="flex w-full box-border items-center justify-center gap-2 rounded-xl border border-dashed border-gray-300 hover:border-primary text-primary px-3.5 py-2.5 text-[11px] font-bold uppercase tracking-wider bg-gray-50/50 hover:bg-gray-50 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed h-[62px]"
         >
           <UploadCloud size={14} className="text-[#222222]" />
-          <span>{statementUploading ? "Uploading…" : "Upload From Local"}</span>
+          <span>{statementUploading ? "Uploading…" : "Upload"}</span>
         </button>
         {accountGroups.length > 0 && (
           <div className="space-y-2.5 max-h-[220px] overflow-y-auto">

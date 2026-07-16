@@ -196,9 +196,9 @@ export default function ActivityLogPage() {
 					<h1 className="text-xl font-black text-primary uppercase tracking-wider flex items-center gap-2">
 						<span>Activity Log</span>
 					</h1>
-					<p className="text-xs text-gray-500 mt-0.5 font-medium">
+					{/* <p className="text-xs text-gray-500 mt-0.5 font-medium">
 						A plain-English record of who did what, and when. {total > 0 && `${total} entries.`}
-					</p>
+					</p> */}
 				</div>
 
 				<div className="flex items-center gap-2">

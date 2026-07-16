@@ -79,11 +79,11 @@ export default function LoginScreen() {
 					/>
 				</svg>
 
-				<div className="relative text-center px-12">
+				<div className="relative text-center px-16">
 					<Image
 						src="/logo.png"
 						alt="Zensar"
-						width={220}
+						width={225}
 						height={125}
 						className="object-contain h-16 w-auto mx-auto mb-8"
 					/>
