@@ -52,21 +52,41 @@ export interface AiUsageTotals {
   month_call_count: number;
 }
 
+export interface AiUsageRecentRun {
+  run_id: number;
+  completed_at: string | null;
+  triggered_by: string | null;
+  model: string | null;
+  call_count: number;
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
 /**
  * Scope: pass runId for a single run, or dateFrom/dateTo ('YYYY-MM-DD') for a
- * date range. Omit all three for an all-time total.
+ * date range, and/or user (matches AnalysisRun.triggered_by — ignored when
+ * runId is set, same reasoning as the Overview page's User filter). Omit all
+ * four for an all-time total.
  */
 export const getAiUsageSummary = (
   runId?: number,
   dateFrom?: string,
   dateTo?: string,
+  user?: string,
 ) =>
   API.get<AiUsageSummary>("/api/ai-usage/summary", {
     params: {
       ...(runId ? { run_id: runId } : {}),
       ...(dateFrom ? { date_from: dateFrom } : {}),
       ...(dateTo ? { date_to: dateTo } : {}),
+      ...(user ? { user } : {}),
     },
+  });
+
+/** Per-run AI usage for the last `limit` completed runs, optionally scoped to one user. */
+export const getAiUsageRecentRuns = (user?: string, limit = 5) =>
+  API.get<{ runs: AiUsageRecentRun[] }>("/api/ai-usage/recent", {
+    params: { ...(user ? { user } : {}), limit },
   });
 
 /** Global all-time + current-month totals (independent of the panel scope). */
@@ -83,6 +103,7 @@ export const downloadAiUsageCsv = async (
   runId?: number,
   dateFrom?: string,
   dateTo?: string,
+  user?: string,
 ) => {
   const res = await API.get("/api/ai-usage/export", {
     responseType: "blob",
@@ -90,6 +111,7 @@ export const downloadAiUsageCsv = async (
       ...(runId ? { run_id: runId } : {}),
       ...(dateFrom ? { date_from: dateFrom } : {}),
       ...(dateTo ? { date_to: dateTo } : {}),
+      ...(user ? { user } : {}),
     },
   });
   const url = window.URL.createObjectURL(new Blob([res.data], { type: "text/csv" }));

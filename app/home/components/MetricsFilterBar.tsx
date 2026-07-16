@@ -54,10 +54,10 @@ export default function MetricsFilterBar({
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-gray-100">
         <div>
           <h2 className="text-xs font-black text-primary uppercase tracking-wider">
-            Dashboard
+            Reconciliation Summary
           </h2>
           <p className="text-[11px] text-gray-500 mt-0.5">
-            Overall summary for the selected period and applied filters.
+            Matching results for the period and filters selected below.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 self-start xl:self-auto">
@@ -69,7 +69,7 @@ export default function MetricsFilterBar({
                   setTimePeriod(p);
                   setIsCustomDateActive(p === "Custom Date");
                 }}
-                className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-xs transition-all cursor-pointer ${timePeriod === p ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}
+                className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-xs transition-all cursor-pointer ${timePeriod === p ? "bg-[#222222] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}
               >
                 {p}
               </button>

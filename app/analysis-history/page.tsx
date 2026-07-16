@@ -229,16 +229,16 @@ function PreviewTable({ preview, filter, onFilterChange }: {
         <div className="relative shrink-0">
           <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
           <input type="text" placeholder="Filter rows…" value={filter} onChange={(e) => onFilterChange(e.target.value)}
-            className="bg-white border border-gray-300 rounded-xs text-[10px] font-medium pl-6 pr-2.5 py-1 w-40 outline-none focus:border-[#4A90E2]" />
+            className="bg-white border border-gray-300 rounded-xs text-[10px] font-medium pl-6 pr-2.5 py-1 w-40 outline-none focus:border-[#222222]" />
         </div>
       </div>
       <div className="flex-1 overflow-auto">
         <table className="w-full text-left border-collapse text-[10px]" style={{ minWidth: `${preview.columns.length * 110}px` }}>
           <thead className="sticky top-0 z-10">
-            <tr className="bg-[#1E3A5F] text-white">
-              <th className="px-2 py-2 text-[9px] font-black uppercase tracking-wider text-white/50 w-10 text-center bg-[#1E3A5F]">#</th>
+            <tr className="bg-[#222222] text-white">
+              <th className="px-2 py-2 text-[9px] font-black uppercase tracking-wider text-white/50 w-10 text-center bg-[#222222]">#</th>
               {preview.columns.map((col: string) => (
-                <th key={col} className="px-2.5 py-2 text-[9px] font-black uppercase tracking-wider whitespace-nowrap bg-[#1E3A5F]">{col}</th>
+                <th key={col} className="px-2.5 py-2 text-[9px] font-black uppercase tracking-wider whitespace-nowrap bg-[#222222]">{col}</th>
               ))}
             </tr>
           </thead>
@@ -309,14 +309,14 @@ function FilePreviewPanel({ statementFiles = [], bucket = "active" }: {
           <button
             onClick={() => { setSource("statement"); setFilter(""); }}
             className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-xs transition-all cursor-pointer ${
-              source === "statement" ? "bg-[#1E3A5F] text-white" : "text-gray-500 hover:text-[#1E3A5F]"
+              source === "statement" ? "bg-[#222222] text-white" : "text-gray-500 hover:text-[#222222]"
             }`}>
             <FileText size={10} /> Statement
           </button>
           <button
             onClick={() => { setSource("aging"); setFilter(""); }}
             className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-xs transition-all cursor-pointer ${
-              source === "aging" ? "bg-[#1E3A5F] text-white" : "text-gray-500 hover:text-[#1E3A5F]"
+              source === "aging" ? "bg-[#222222] text-white" : "text-gray-500 hover:text-[#222222]"
             }`}>
             <Layers size={10} /> Ageing Report
           </button>
@@ -329,8 +329,8 @@ function FilePreviewPanel({ statementFiles = [], bucket = "active" }: {
               <button key={f} onClick={() => setActiveFile(f)}
                 className={`flex items-center gap-1 px-2 py-1 rounded-xs text-[9px] font-bold uppercase tracking-wider border cursor-pointer truncate max-w-[140px] ${
                   activeFile === f
-                    ? "bg-[#1E3A5F] text-white border-[#1E3A5F]"
-                    : "bg-white text-gray-600 border-gray-300 hover:border-[#2E6DA4]"
+                    ? "bg-[#222222] text-white border-[#222222]"
+                    : "bg-white text-gray-600 border-gray-300 hover:border-[#222222]"
                 }`}>
                 <FileText size={9} /><span className="truncate">{f}</span>
               </button>
@@ -355,6 +355,12 @@ function FilePreviewPanel({ statementFiles = [], bucket = "active" }: {
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
+
+// Temporarily hidden per request — the bulk multi-select/Approve Selected
+// flow stays fully implemented below (checkboxes, handleBulkApprove, the
+// button), just not rendered. Flip back to true to re-enable; nothing else
+// needs to change.
+const ENABLE_BULK_APPROVE = false;
 
 export default function AnalysisHistoryPage() {
   return (
@@ -635,7 +641,7 @@ function AnalysisHistoryPageInner() {
             <p className="text-xs text-gray-500 mt-0.5">All analysis runs across all account statements</p>
           </div>
           <button onClick={exportHistoryCSV}
-            className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider bg-[#1E3A5F] hover:bg-[#2E6DA4] text-white px-4 py-2.5 rounded-sm shadow-xs transition-colors cursor-pointer">
+            className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider bg-[#222222] hover:bg-[#222222] text-white px-4 py-2.5 rounded-sm shadow-xs transition-colors cursor-pointer">
             <Download size={13} /> Download CSV
           </button>
         </div>
@@ -644,7 +650,7 @@ function AnalysisHistoryPageInner() {
           <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xs">
             {["Latest","Today","Yesterday","WTD","MTD","Custom Range"].map((period) => (
               <button key={period} onClick={() => { setTimePeriod(period); setIsCustomRangeActive(period === "Custom Range"); }}
-                className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-xs transition-all cursor-pointer ${timePeriod===period ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}>
+                className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-xs transition-all cursor-pointer ${timePeriod===period ? "bg-[#222222] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}>
                 {period}
               </button>
             ))}
@@ -652,10 +658,10 @@ function AnalysisHistoryPageInner() {
           {isCustomRangeActive && (
             <div className="flex items-center gap-1.5 border-l border-gray-200 pl-3">
               <input type="date" value={customStart} onChange={(e) => { const v=e.target.value; setCustomStart(v); if(customEnd) doLoadRuns("Custom Range",v,customEnd); }}
-                className="bg-gray-50 border border-gray-300 rounded-sm text-[10px] font-bold text-gray-600 px-2 py-1 outline-none focus:border-[#4A90E2]" />
+                className="bg-gray-50 border border-gray-300 rounded-sm text-[10px] font-bold text-gray-600 px-2 py-1 outline-none focus:border-[#222222]" />
               <span className="text-[10px] font-bold text-gray-400">TO</span>
               <input type="date" value={customEnd} onChange={(e) => { const v=e.target.value; setCustomEnd(v); if(customStart) doLoadRuns("Custom Range",customStart,v); }}
-                className="bg-gray-50 border border-gray-300 rounded-sm text-[10px] font-bold text-gray-600 px-2 py-1 outline-none focus:border-[#4A90E2]" />
+                className="bg-gray-50 border border-gray-300 rounded-sm text-[10px] font-bold text-gray-600 px-2 py-1 outline-none focus:border-[#222222]" />
             </div>
           )}
         </div>
@@ -664,7 +670,7 @@ function AnalysisHistoryPageInner() {
           <div className="relative">
             <Landmark size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <select value={selectedBank} onChange={(e) => setSelectedBank(e.target.value)}
-              className="w-full bg-white border border-gray-300 text-xs font-bold text-primary pl-9 pr-8 py-2.5 rounded-sm appearance-none focus:outline-none focus:border-[#4A90E2] cursor-pointer">
+              className="w-full bg-white border border-gray-300 text-xs font-bold text-primary pl-9 pr-8 py-2.5 rounded-sm appearance-none focus:outline-none focus:border-[#222222] cursor-pointer">
               <option>All Banks</option>{bankOptions.map((b) => <option key={b}>{b}</option>)}
             </select>
             <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -672,7 +678,7 @@ function AnalysisHistoryPageInner() {
           <div className="relative">
             <Briefcase size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <select value={selectedBU} onChange={(e) => setSelectedBU(e.target.value)}
-              className="w-full bg-white border border-gray-300 text-xs font-bold text-primary pl-9 pr-8 py-2.5 rounded-sm appearance-none focus:outline-none focus:border-[#4A90E2] cursor-pointer">
+              className="w-full bg-white border border-gray-300 text-xs font-bold text-primary pl-9 pr-8 py-2.5 rounded-sm appearance-none focus:outline-none focus:border-[#222222] cursor-pointer">
               <option>All BUs</option>{buOptions.map((b) => <option key={b}>{b}</option>)}
             </select>
             <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -680,7 +686,7 @@ function AnalysisHistoryPageInner() {
           <div className="relative">
             <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" placeholder="Search by user..." value={searchUser} onChange={(e) => setSearchUser(e.target.value)}
-              className="w-full bg-white border border-gray-300 text-xs font-semibold text-primary pl-9 pr-4 py-2.5 rounded-sm focus:outline-none focus:border-[#4A90E2]" />
+              className="w-full bg-white border border-gray-300 text-xs font-semibold text-primary pl-9 pr-4 py-2.5 rounded-sm focus:outline-none focus:border-[#222222]" />
           </div>
         </div>
 
@@ -693,7 +699,7 @@ function AnalysisHistoryPageInner() {
           </span>
           <div className="relative">
             <select value={selectedTriggeredBy} onChange={(e) => setSelectedTriggeredBy(e.target.value)}
-              className="w-full bg-white border border-gray-300 text-xs font-bold text-primary pl-3 pr-8 py-2 rounded-sm appearance-none focus:outline-none focus:border-[#4A90E2] cursor-pointer">
+              className="w-full bg-white border border-gray-300 text-xs font-bold text-primary pl-3 pr-8 py-2 rounded-sm appearance-none focus:outline-none focus:border-[#222222] cursor-pointer">
               <option>All Users</option>{triggeredByOptions.map((u) => <option key={u}>{u}</option>)}
             </select>
             <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -704,11 +710,11 @@ function AnalysisHistoryPageInner() {
           <div className="flex-1 overflow-auto relative">
             <table className="w-full text-left border-collapse min-w-[1100px]">
               <thead className="sticky top-0 z-20 shadow-[0_1px_0_0_rgba(23,46,76,1)]">
-                <tr className="bg-[#1E3A5F] text-white">
+                <tr className="bg-[#222222] text-white">
                   {["Time","Account Statement(s)","Bank(s)","BU(s)","Run By","Total Rows","Identified","Unidentified","Ready for Oracle","Status"].map((h) => (
-                    <th key={h} className="px-3 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#1E3A5F]">{h}</th>
+                    <th key={h} className="px-3 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#222222]">{h}</th>
                   ))}
-                  <th className="sticky right-0 z-30 px-4 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#1E3A5F] border-l border-[#172e4c] text-center w-24 shadow-[-2px_0_4px_rgba(0,0,0,0.1)]">View</th>
+                  <th className="sticky right-0 z-30 px-4 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#222222] border-l border-[#000000] text-center w-24 shadow-[-2px_0_4px_rgba(0,0,0,0.1)]">View</th>
                 </tr>
               </thead>
               <tbody className="text-[11px] divide-y divide-gray-200 font-medium text-gray-700 bg-white">
@@ -733,7 +739,7 @@ function AnalysisHistoryPageInner() {
                     </td>
                     <td className="sticky right-0 bg-white group-hover:bg-gray-50 px-4 py-2 border-l border-gray-100 text-center z-10">
                       <button onClick={() => { setViewingRun(r); setSelectedLines({}); loadRunDetail(r); router.push(`/analysis-history?run_id=${r.run_id}`); }}
-                        className="inline-flex items-center gap-1 bg-[#1E3A5F] hover:bg-[#2E6DA4] text-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-xs shadow-xs transition-colors cursor-pointer">
+                        className="inline-flex items-center gap-1 bg-[#222222] hover:bg-[#222222] text-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-xs shadow-xs transition-colors cursor-pointer">
                         <Eye size={11}/><span>View</span>
                       </button>
                     </td>
@@ -761,7 +767,7 @@ function AnalysisHistoryPageInner() {
       <div className="flex flex-col h-full overflow-hidden space-y-4">
         <div className="pb-2 border-b border-gray-200 flex-shrink-0">
           <button onClick={() => { setViewingRun(null); setSelectedLines({}); router.push("/analysis-history"); }}
-            className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-[#1E3A5F] hover:text-[#2E6DA4] transition-colors cursor-pointer">
+            className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-[#222222] hover:text-[#222222] transition-colors cursor-pointer">
             <ArrowLeft size={14} className="stroke-[3]"/><span>Back to Analysis History</span>
           </button>
         </div>
@@ -769,7 +775,7 @@ function AnalysisHistoryPageInner() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch flex-1 min-h-0 overflow-hidden">
           {/* Statement Preview */}
           <div className={`flex flex-col h-full overflow-hidden border border-gray-200 rounded-sm bg-white shadow-xs transition-all duration-200 ${previewVisible ? "lg:col-span-4" : "lg:col-span-1 min-w-[48px]"}`}>
-            <div className="flex-shrink-0 border-b border-gray-200 bg-[#1E3A5F] px-3 py-2 flex items-center justify-between">
+            <div className="flex-shrink-0 border-b border-gray-200 bg-[#222222] px-3 py-2 flex items-center justify-between">
               {previewVisible && <span className="text-[9px] font-black text-white uppercase tracking-wider truncate">Statement Preview</span>}
               <button onClick={() => setPreviewVisible((v) => !v)} className="ml-auto text-[9px] font-black text-white/70 hover:text-white cursor-pointer px-1.5 py-0.5 rounded-xs hover:bg-white/10 transition-colors whitespace-nowrap">
                 {previewVisible ? "Hide ✕" : "▶"}
@@ -780,7 +786,7 @@ function AnalysisHistoryPageInner() {
                 <div className="flex flex-wrap gap-1.5">
                   {allFiles.map((f) => (
                     <button key={f} onClick={() => setPreviewFile(f)}
-                      className={`flex items-center gap-1 px-2 py-1 rounded-xs text-[9px] font-bold uppercase tracking-wider border cursor-pointer ${previewFile===f?"bg-[#1E3A5F] text-white border-[#1E3A5F]":"bg-white text-gray-600 border-gray-300 hover:border-[#2E6DA4]"}`}>
+                      className={`flex items-center gap-1 px-2 py-1 rounded-xs text-[9px] font-bold uppercase tracking-wider border cursor-pointer ${previewFile===f?"bg-[#222222] text-white border-[#222222]":"bg-white text-gray-600 border-gray-300 hover:border-[#222222]"}`}>
                       <FileText size={10} /><span className="max-w-[120px] truncate">{f}</span>
                     </button>
                   ))}
@@ -805,7 +811,7 @@ function AnalysisHistoryPageInner() {
                 </div>
               </div>
               <button onClick={exportDetailCSV}
-                className="flex items-center gap-2 text-xs font-black uppercase tracking-wider bg-[#1E3A5F] hover:bg-[#2E6DA4] text-white px-4 py-2 rounded-sm transition-colors shadow-2xs cursor-pointer whitespace-nowrap">
+                className="flex items-center gap-2 text-xs font-black uppercase tracking-wider bg-[#222222] hover:bg-[#222222] text-white px-4 py-2 rounded-sm transition-colors shadow-2xs cursor-pointer whitespace-nowrap">
                 <Download size={13}/> Download CSV
               </button>
             </div>
@@ -813,7 +819,7 @@ function AnalysisHistoryPageInner() {
             {/* Metric cards — 7 cards matching the backend's 7 real groups */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-shrink-0">
               {[
-                { label:"Total Rows",          value:m?.total_rows         ??0, sub:"All statement rows",                          icon:<Layers size={12} className="text-[#1E3A5F]"/>,  color:"text-gray-400"    },
+                { label:"Total Rows",          value:m?.total_rows         ??0, sub:"All statement rows",                          icon:<Layers size={12} className="text-[#222222]"/>,  color:"text-gray-400"    },
                 { label:"Unidentified",        value:m?.unidentified       ??0, sub:"No customer or invoice signal",               icon:<HelpCircle size={12}/>,                          color:"text-red-500"     },
                 { label:"Needs Remittance",    value:m?.needs_remittance   ??0, sub:"Customer found, awaiting remittance/invoice", icon:<Calendar size={12}/>,                            color:"text-amber-500"   },
                 { label:"Ready for Oracle",    value:m?.ready_for_oracle   ??0, sub:"Exact match or within tolerance — one click to post", icon:<Sparkles size={12}/>,                       color:"text-emerald-600" },
@@ -837,7 +843,7 @@ function AnalysisHistoryPageInner() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <h3 className="text-xs font-black text-primary uppercase tracking-wider">Line Items Ledger</h3>
                 <div className="flex items-center gap-2">
-                  {activeTab === "ready_for_oracle" && (
+                  {ENABLE_BULK_APPROVE && activeTab === "ready_for_oracle" && (
                     <button
                       onClick={handleBulkApprove}
                       disabled={selectedEligibleIds.length === 0 || bulkApproving}
@@ -860,7 +866,7 @@ function AnalysisHistoryPageInner() {
                     <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
                     <input type="text" placeholder="Search narrative or ID…" value={searchNarrative}
                       onChange={(e) => setSearchNarrative(e.target.value)}
-                      className="w-full bg-white border border-gray-300 text-[11px] font-medium text-primary pl-8 pr-3 py-2 rounded-sm focus:outline-none focus:border-[#4A90E2]"/>
+                      className="w-full bg-white border border-gray-300 text-[11px] font-medium text-primary pl-8 pr-3 py-2 rounded-sm focus:outline-none focus:border-[#222222]"/>
                   </div>
                 </div>
               </div>
@@ -878,7 +884,7 @@ function AnalysisHistoryPageInner() {
               <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xs w-max max-w-full overflow-x-auto">
                 {TABS.map((tab) => (
                   <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-xs transition-all whitespace-nowrap cursor-pointer ${activeTab===tab.key ? "bg-[#1E3A5F] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}>
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-xs transition-all whitespace-nowrap cursor-pointer ${activeTab===tab.key ? "bg-[#222222] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}>
                     {tab.label}
                     <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-black ${activeTab===tab.key ? "bg-white/20 text-white" : "bg-gray-200 text-gray-600"}`}>
                       {tab.count}
@@ -893,18 +899,20 @@ function AnalysisHistoryPageInner() {
               <div className="flex-1 overflow-auto relative">
                 <table className="w-full text-left border-collapse min-w-[2100px]">
                   <thead className="sticky top-0 z-20 shadow-[0_1px_0_0_rgba(23,46,76,1)]">
-                    <tr className="bg-[#1E3A5F] text-white">
-                      <th className="px-3 py-2.5 bg-[#1E3A5F] w-10 text-center">
-                        <input type="checkbox"
-                          checked={Object.keys(selectedLines).length===activeRows.length && activeRows.length>0}
-                          onChange={() => {
-                            if (Object.keys(selectedLines).length === activeRows.length) { setSelectedLines({}); return; }
-                            const all: Record<number,boolean> = {}; activeRows.forEach((l) => (all[l.id] = true)); setSelectedLines(all);
-                          }}
-                          className="rounded-xs text-[#4A90E2] focus:ring-0 cursor-pointer"/>
+                    <tr className="bg-[#222222] text-white">
+                      <th className="px-3 py-2.5 bg-[#222222] w-10 text-center">
+                        {ENABLE_BULK_APPROVE && (
+                          <input type="checkbox"
+                            checked={Object.keys(selectedLines).length===activeRows.length && activeRows.length>0}
+                            onChange={() => {
+                              if (Object.keys(selectedLines).length === activeRows.length) { setSelectedLines({}); return; }
+                              const all: Record<number,boolean> = {}; activeRows.forEach((l) => (all[l.id] = true)); setSelectedLines(all);
+                            }}
+                            className="rounded-xs text-[#222222] focus:ring-0 cursor-pointer"/>
+                        )}
                       </th>
                       {["Bank","BU","Date","Narrative","Credit Amount","CCY","Extracted Customer","Extracted Invoice","Method","Confidence","Matched Customer","Matched Invoice","Outstanding","Inv CCY","Group","Reason","Status","Actions"].map((h) => (
-                        <th key={h} className={`px-3 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#1E3A5F] ${h==="Credit Amount"||h==="Outstanding"?"text-right":h==="Actions"?"sticky right-0 border-l border-[#172e4c] text-center w-24 shadow-[-2px_0_4px_rgba(0,0,0,0.1)]":""}`}>{h}</th>
+                        <th key={h} className={`px-3 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#222222] ${h==="Credit Amount"||h==="Outstanding"?"text-right":h==="Actions"?"sticky right-0 border-l border-[#000000] text-center w-24 shadow-[-2px_0_4px_rgba(0,0,0,0.1)]":""}`}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -960,9 +968,11 @@ function AnalysisHistoryPageInner() {
                           onClick={() => canOpenRow && router.push(`/analysis-history/row/${line.id}?run_id=${viewingRun.run_id}`)}
                           className={`transition-colors group ${canOpenRow ? "cursor-pointer hover:bg-blue-50/40" : "hover:bg-gray-50/80"} ${selectedLines[line.id]?"bg-blue-50/20":""}`}>
                           <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
-                            <input type="checkbox" checked={!!selectedLines[line.id]}
-                              onChange={() => setSelectedLines((p) => ({...p,[line.id]:!p[line.id]}))}
-                              className="rounded-xs text-[#4A90E2] focus:ring-0 cursor-pointer"/>
+                            {ENABLE_BULK_APPROVE && (
+                              <input type="checkbox" checked={!!selectedLines[line.id]}
+                                onChange={() => setSelectedLines((p) => ({...p,[line.id]:!p[line.id]}))}
+                                className="rounded-xs text-[#222222] focus:ring-0 cursor-pointer"/>
+                            )}
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap font-bold text-primary">{line.bank_name}</td>
                           <td className="px-3 py-3 whitespace-nowrap text-xs font-semibold">{line.business_unit||"—"}</td>

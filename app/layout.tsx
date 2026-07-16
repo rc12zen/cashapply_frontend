@@ -4,12 +4,14 @@ import "./globals.css";
 import {
 	BarChart2,
 	FileBarChart,
+	HelpCircle,
 	History,
 	Home,
 	LogOut,
 	Menu,
+	PieChart,
 	Settings,
-	User,
+	Sparkles,
 	Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -25,6 +27,7 @@ const navItems: {
 	requiresAdmin?: boolean;
 }[] = [
 	{ href: "/home", label: "Home", icon: Home, section: "Main" },
+	{ href: "/overview", label: "Overview", icon: PieChart, section: "Main" },
 	{
 		href: "/analysis-history",
 		label: "Analysis History",
@@ -37,6 +40,7 @@ const navItems: {
 		icon: FileBarChart,
 		section: "Main",
 	},
+	{ href: "/ai-usage", label: "AI Usage", icon: Sparkles, section: "Main" },
 	//
 	{
 		href: "/activity-log",
@@ -47,6 +51,7 @@ const navItems: {
 	{ href: "/config", label: "Config", icon: Settings, section: "Settings" },
 	// Admin-only — gated below by the current user's permissions from /me.
 	{ href: "/users", label: "Users", icon: Users, section: "Settings", requiresAdmin: true },
+	{ href: "/faq", label: "FAQ", icon: HelpCircle, section: "Help" },
 ];
 
 export default function RootLayout({
@@ -114,44 +119,46 @@ export default function RootLayout({
 
 	return (
 		<html lang="en" className="h-full">
-			<body className="antialiased text-gray-800 bg-gray-50 h-full overflow-hidden">
+			<body className="antialiased text-[#222222] bg-[#F1FAF8] h-full overflow-hidden">
 				{isLoginPage ? (
 					children
 				) : (
 					<div className="flex flex-col h-screen w-screen overflow-hidden">
 						{/* GLOBAL FIXED TOP BAR */}
-						<header className="h-16 bg-[#1E3A5F] text-white px-6 flex items-center justify-between sticky top-0 z-30 shadow-xs border-b border-[#172e4c] shrink-0">
+						<header className="h-20 bg-[#222222] text-white px-6 flex items-center justify-between sticky top-0 z-30 shadow-xs border-b border-white/10 shrink-0">
 							<div className="flex items-center gap-4">
 								<button
 									onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-									className="p-1.5 rounded-sm hover:bg-[#2E6DA4]/30 transition-colors focus:outline-none cursor-pointer"
+									className="p-1.5 rounded-sm hover:bg-white/10 transition-colors focus:outline-none cursor-pointer"
 									aria-label="Toggle Sidebar"
 								>
 									<Menu size={18} />
 								</button>
 
-								<div className="flex items-center gap-2">
-									{/* Logo */}
-									<div className="flex justify-center">
+								<div className="flex items-center gap-3">
+									{/* Logo — white asset, shown directly on the black header (no
+									    backdrop chip — that would hide a white logo, not reveal it) */}
+									<div className="flex items-center justify-center shrink-0">
 										<Image
 											src="/logo.png"
-											alt="Cash Apply Logo"
-											width={48}
-											height={48}
-											className="object-contain"
+											alt="Zensar Logo"
+											width={52}
+											height={52}
+											className="object-contain w-[52px] h-[52px]"
 										/>
 									</div>
-									<div className="leading-tight border-r border-[#2E6DA4]/40 pr-4">
+									<div className="leading-tight border-r border-white/20 pr-4">
 										<div className="text-xs font-black uppercase tracking-tight whitespace-nowrap">
 											Cash Apply
 										</div>
-										<div className="text-[9px] text-[#4A90E2] font-black uppercase tracking-widest">
+										<div className="text-[9px] text-white/70 font-black uppercase tracking-widest">
 											From bank statement to Fusion - in seconds
 										</div>
 									</div>
-									<h1 className="text-xs font-black uppercase tracking-wider text-white pl-1 hidden sm:block">
-										{getPageTitle()}
-									</h1>
+									{/* Page title removed from the header bar — it was showing
+									     the same label 3x (here, the highlighted sidebar item, and
+									     the page's own H1). getPageTitle() is kept for potential
+									     reuse (e.g. document.title) even though it is unused here now. */}
 								</div>
 							</div>
 
@@ -160,7 +167,7 @@ export default function RootLayout({
 									<p className="text-xs font-bold text-white capitalize flex items-center gap-1.5 justify-end">
 										{userIdentifier}
 										{userRole && (
-											<span className="text-[9px] font-black uppercase tracking-wider bg-[#4A90E2]/20 text-[#4A90E2] px-1.5 py-0.5 rounded-sm border border-[#4A90E2]/30">
+											<span className="text-[9px] font-black uppercase tracking-wider bg-white/15 text-white px-1.5 py-0.5 rounded-sm border border-white/25">
 												{userRole}
 											</span>
 										)}
@@ -169,10 +176,17 @@ export default function RootLayout({
 										{userEmail}
 									</p>
 								</div>
-								<div className="h-8 w-8 rounded-full bg-[#2E6DA4]/20 text-white flex items-center justify-center border border-[#4A90E2]/20">
-									<User size={14} />
+								{/* eslint-disable-next-line @next/next/no-img-element -- plain <img>
+								     on purpose: next/image would re-encode/optimize the GIF and can
+								     strip its animation */}
+								<div className="h-9 w-9 rounded-full overflow-hidden shrink-0 shadow-sm">
+									<img
+										src="/Z-logo.gif"
+										alt="Profile"
+										className="h-full w-full object-cover"
+									/>
 								</div>
-								<hr className="w-px h-6 bg-[#2E6DA4]/30" />
+								<hr className="w-px h-6 bg-white/20" />
 								<Link
 									href="/"
 									onClick={handleSignOut}
@@ -184,10 +198,10 @@ export default function RootLayout({
 							</div>
 						</header>
 
-						<div className="flex flex-1 h-[calc(100vh-64px)] relative overflow-hidden">
+						<div className="flex flex-1 h-[calc(100vh-80px)] relative overflow-hidden">
 							{/* FIXED NAVIGATION PANEL */}
 							<aside
-								className={`bg-white border-r border-gray-200 flex flex-col fixed left-0 bottom-0 top-16 z-20 transition-all duration-300 ease-in-out shrink-0 ${
+								className={`bg-white border-r border-gray-200 flex flex-col fixed left-0 bottom-0 top-20 z-20 transition-all duration-300 ease-in-out shrink-0 ${
 									isSidebarOpen ? "w-60" : "w-16"
 								}`}
 							>
@@ -219,14 +233,14 @@ export default function RootLayout({
 														title={!isSidebarOpen ? label : undefined}
 														className={`flex items-center gap-3 w-full px-6 py-2 text-xs font-bold uppercase tracking-wider transition-all duration-150 ${
 															active
-																? "bg-[#1E3A5F] text-white border-l-4 border-[#4A90E2] pl-5"
+																? "bg-[#222222] text-white border-l-4 border-white pl-5"
 																: "text-gray-500 hover:bg-gray-50 hover:text-primary pl-6"
 														}`}
 													>
 														<div className="flex-shrink-0">
 															<Icon
 																size={16}
-																className={active ? "text-[#4A90E2]" : ""}
+																className={active ? "text-white" : ""}
 															/>
 														</div>
 														<span
