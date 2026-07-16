@@ -33,29 +33,34 @@ export default function AccountStatementsCard({
   detectionInfo, onOpenResolveForFile, onOpenWizardForFile, onRemoveFile,
 }: AccountStatementsCardProps) {
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm flex flex-col justify-between min-h-[140px]">
+    <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm flex flex-col min-h-[140px]">
       <div>
         <h3 className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-2 mb-3">
           <FileText size={14} className="text-[#222222]" /> Account Statements
         </h3>
-        <input
-          ref={statementInputRef}
-          type="file"
-          accept=".xlsx,.xls,.csv"
-          className="hidden"
-          onChange={onStatementUpload}
-        />
+        <p className="text-[11px] text-gray-500 leading-relaxed">
+          Upload XLS / CSV files. Max 10 MB each.
+        </p>
+      </div>
+      <input
+        ref={statementInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        className="hidden"
+        onChange={onStatementUpload}
+      />
+      <div className="mt-3 pt-2 border-t border-gray-100 space-y-2.5">
         <button
           onClick={() => statementInputRef.current?.click()}
           disabled={statementUploading}
-          className="w-full flex items-center justify-center gap-2 rounded-xl border border-dashed border-gray-300 hover:border-primary text-primary py-3.5 px-4 text-[11px] font-bold uppercase tracking-wider bg-gray-50/50 hover:bg-gray-50 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ width: "100%" }}
+          className="flex w-full box-border items-center justify-center gap-2 rounded-xl border border-dashed border-gray-300 hover:border-primary text-primary px-3.5 py-2.5 text-[11px] font-bold uppercase tracking-wider bg-gray-50/50 hover:bg-gray-50 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed h-[62px]"
         >
           <UploadCloud size={14} className="text-[#222222]" />
           <span>{statementUploading ? "Uploading…" : "Upload From Local"}</span>
         </button>
-      </div>
-      {accountGroups.length > 0 ? (
-        <div className="mt-3 pt-2 border-t border-gray-100 space-y-2.5 max-h-[220px] overflow-y-auto">
+        {accountGroups.length > 0 && (
+          <div className="space-y-2.5 max-h-[220px] overflow-y-auto">
           {accountGroups.map((g) => {
             // Only recognised accounts with pending rows can be included in a
             // run (see isAccountRunnable). An Unknown/errored/0-row statement's
@@ -180,12 +185,9 @@ export default function AccountStatementsCard({
               </div>
             );
           })}
-        </div>
-      ) : (
-        <div className="mt-3 pt-2 border-t border-gray-100 text-[11px] text-gray-400">
-          Upload XLS / CSV files. Max 10 MB each.
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

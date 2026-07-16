@@ -13,6 +13,7 @@ import {
 	Settings,
 	Sparkles,
 	Users,
+	Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -125,7 +126,7 @@ export default function RootLayout({
 				) : (
 					<div className="flex flex-col h-screen w-screen overflow-hidden">
 						{/* GLOBAL FIXED TOP BAR */}
-						<header className="h-20 bg-[#222222] text-white px-6 flex items-center justify-between sticky top-0 z-30 shadow-xs border-b border-white/10 shrink-0">
+						<header className="h-20 bg-[#222222] text-white px-6 flex items-center justify-between sticky top-0 z-30 shadow-xs border-b border-white/10 shrink-0 relative">
 							<div className="flex items-center gap-4">
 								<button
 									onClick={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -135,31 +136,32 @@ export default function RootLayout({
 									<Menu size={18} />
 								</button>
 
-								<div className="flex items-center gap-3">
-									{/* Logo — white asset, shown directly on the black header (no
-									    backdrop chip — that would hide a white logo, not reveal it) */}
-									<div className="flex items-center justify-center shrink-0">
-										<Image
-											src="/logo.png"
-											alt="Zensar Logo"
-											width={52}
-											height={52}
-											className="object-contain w-[52px] h-[52px]"
-										/>
+								{/* "Cash Apply" title on the left; the Zensar logo is centered
+								     in the header independently (see below) rather than grouped
+								     here, matching zensar.com's own centered-wordmark layout. */}
+								<div className="leading-tight animate-title-in">
+									<div className="text-lg font-black uppercase tracking-tight whitespace-nowrap">
+										Cash Apply
 									</div>
-									<div className="leading-tight border-r border-white/20 pr-4">
-										<div className="text-xs font-black uppercase tracking-tight whitespace-nowrap">
-											Cash Apply
-										</div>
-										<div className="text-[9px] text-white/70 font-black uppercase tracking-widest">
-											From bank statement to Fusion - in seconds
-										</div>
+									{/* Shortened to roughly match "Cash Apply"'s width — was a much
+									     longer "From bank statement to Fusion - in seconds" line. */}
+									<div className="text-[9px] text-white/70 font-black uppercase tracking-widest flex items-center gap-1 whitespace-nowrap">
+										Bank statement To Fusion in seconds<Zap size={10} className="fill-current" />
 									</div>
-									{/* Page title removed from the header bar — it was showing
-									     the same label 3x (here, the highlighted sidebar item, and
-									     the page's own H1). getPageTitle() is kept for potential
-									     reuse (e.g. document.title) even though it is unused here now. */}
 								</div>
+							</div>
+
+							{/* Zensar logo — centered independently of the left/right groups,
+							     white asset shown directly on the black header (no backdrop
+							     chip — that would hide a white logo, not reveal it). */}
+							<div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+								<Image
+									src="/logo.png"
+									alt="Zensar Logo"
+									width={90}
+									height={51}
+									className="object-contain h-7 w-auto"
+								/>
 							</div>
 
 							<div className="flex items-center gap-4">

@@ -3,7 +3,6 @@ import {
 	AlertTriangle,
 	Calendar,
 	CheckCircle,
-	ChevronDown,
 	Download,
 	FileText,
 	History,
@@ -97,17 +96,10 @@ export default function ActivityLogPage() {
 	const [error, setError] = useState("");
 	const pageSize = 50;
 
-	// Which rows have their technical details (raw action code, IP address)
-	// expanded — collapsed by default so the list reads as plain sentences
-	// for anyone who isn't an engineer, while still being one click away
-	// for whoever does need it.
-	const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
-	const toggleExpanded = (id: number) =>
-		setExpandedIds((prev) => {
-			const next = new Set(prev);
-			if (next.has(id)) next.delete(id); else next.add(id);
-			return next;
-		});
+	// (previously: expandedIds/toggleExpanded state for a "Show details"
+	// disclosure — removed. The user/run/entity identifiers it hid are now
+	// always-visible chips instead, since burying who-did-what-to-which-run
+	// behind an extra click made the log hard to scan at a glance.)
 
 	// One-time cleanup of the historical "GET /api/..." style noise rows a
 	// now-removed background process used to write (see backend
@@ -332,64 +324,52 @@ export default function ActivityLogPage() {
 						</div>
 					) : (
 						filteredLogs.map((log) => {
-							const badge = describeAction(log);
-							const isExpanded = expandedIds.has(log.id);
-							const hasDetails = !!(log.ip_address || log.entity_id || log.entity_type);
-							return (
-								<div key={log.id} className="flex flex-col md:flex-row items-stretch hover:bg-gray-50/60 transition-colors group">
-									<div className="md:w-48 p-4 bg-gray-50/40 border-b md:border-b-0 md:border-r border-gray-100 flex flex-row md:flex-col items-center md:items-start justify-between md:justify-center gap-1 shrink-0">
-										<div className="text-xs font-bold text-primary tracking-tight">
-											{fmtTimestamp(log.created_at)}
-										</div>
-									</div>
-
-									<div className="flex-1 p-4 flex flex-col justify-between space-y-2">
-										<div className="flex flex-wrap items-center gap-2">
-											<span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider border rounded-xs px-2 py-0.5 shadow-2xs ${badge.styles}`}>
-												{badge.icon}
-												<span>{badge.label}</span>
-											</span>
-											{log.status === "failure" && (
-												<span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider border rounded-xs px-2 py-0.5 bg-red-50 text-red-700 border-red-200">
-													<AlertTriangle size={10} /> Didn't Go Through
-												</span>
-											)}
-											<div className="flex items-center gap-1 text-xs">
-												<User size={11} className="text-gray-400" />
-												<span className="font-black text-[#222222]">{log.user_email || "Automated Process"}</span>
-											</div>
-										</div>
-
-										<p className="text-xs text-gray-700 leading-relaxed font-medium">
-											{log.summary}
-										</p>
-
-										{hasDetails && (
-											<div>
-												<button
-													onClick={() => toggleExpanded(log.id)}
-													className="flex items-center gap-1 text-[10px] font-bold text-gray-400 hover:text-primary cursor-pointer"
-												>
-													<ChevronDown size={11} className={`transition-transform ${isExpanded ? "rotate-180" : ""}`} />
-													{isExpanded ? "Hide details" : "Show details"}
-												</button>
-												{isExpanded && (
-													<div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] font-mono text-gray-400">
-														<span className="font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-xs">{log.action}</span>
-														{log.entity_type && log.entity_id && (
-															<span className="font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-xs">{log.entity_type} #{log.entity_id}</span>
-														)}
-														{log.ip_address && (
-															<span className="font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-xs">IP {log.ip_address}</span>
-														)}
-													</div>
-												)}
-											</div>
-										)}
+						const badge = describeAction(log);
+						return (
+							<div key={log.id} className="flex flex-col md:flex-row items-stretch hover:bg-gray-50/60 transition-colors group">
+								<div className="md:w-48 p-4 bg-gray-50/40 border-b md:border-b-0 md:border-r border-gray-100 flex flex-row md:flex-col items-center md:items-start justify-between md:justify-center gap-1 shrink-0">
+									<div className="text-xs font-bold text-primary tracking-tight">
+										{fmtTimestamp(log.created_at)}
 									</div>
 								</div>
-							);
-						})
+
+								<div className="flex-1 p-4 flex flex-col justify-between space-y-2">
+									{/* Scannable identifier row — user, category, run/entity ID, and
+									    status are always visible now, not hidden behind "Show details".
+									    This is the part meant to answer "who did what to which run/
+									    statement" at a glance, without reading the sentence below. */}
+									<div className="flex flex-wrap items-center gap-2">
+										<span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider border rounded-xs px-2 py-0.5 shadow-2xs ${badge.styles}`}>
+											{badge.icon}
+											<span>{badge.label}</span>
+										</span>
+										{log.status === "failure" && (
+											<span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider border rounded-xs px-2 py-0.5 bg-red-50 text-red-700 border-red-200">
+												<AlertTriangle size={10} /> Didn't Go Through
+											</span>
+										)}
+										<div className="flex items-center gap-1 text-xs">
+											<User size={11} className="text-gray-400" />
+											<span className="font-black text-[#222222]">{log.user_email || "Automated Process"}</span>
+										</div>
+										{log.entity_type && log.entity_id && (
+											<span className="inline-flex items-center gap-1 text-[10px] font-bold text-gray-600 bg-gray-100 border border-gray-200 px-2 py-0.5 rounded-xs font-mono">
+												{log.entity_type} #{log.entity_id}
+											</span>
+										)}
+									</div>
+
+									<p className="text-xs text-gray-500 leading-relaxed">
+										{log.summary}
+									</p>
+
+									{log.ip_address && (
+										<p className="text-[10px] font-mono text-gray-400">IP {log.ip_address}</p>
+									)}
+								</div>
+							</div>
+						);
+					})
 					)}
 				</div>
 			</div>

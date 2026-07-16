@@ -23,7 +23,7 @@ export default function AgingReportCard({
   agingStatus, agingHistory, agingSwitching, onSelectAgingSource,
 }: AgingReportCardProps) {
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm flex flex-col justify-between min-h-[140px]">
+    <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm flex flex-col min-h-[140px]">
       <div>
         <h3 className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-2 mb-3">
           <Layers size={14} className="text-[#222222]" /> Aging Report
@@ -34,7 +34,7 @@ export default function AgingReportCard({
       </div>
       <div className="mt-3 pt-2 border-t border-gray-100 space-y-2">
         {agingStatus.loaded && agingStatus.filename ? (
-          <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3.5 py-2.5">
+          <div style={{ width: "100%" }} className="flex w-full box-border items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3.5 py-2.5 h-[62px]">
             <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
             <div className="min-w-0">
               <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">Loaded</span>
@@ -42,7 +42,7 @@ export default function AgingReportCard({
             </div>
           </div>
         ) : (
-          <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+          <div style={{ width: "100%" }} className="flex w-full box-border items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5 h-[62px]">
             <AlertTriangle size={13} className="text-amber-500 shrink-0" />
             <div>
               <span className="text-[10px] font-black uppercase tracking-wider text-amber-700">Not Loaded</span>

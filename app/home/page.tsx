@@ -17,6 +17,7 @@
  *     handleStatementUpload's shape.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle } from "lucide-react";
 import {deleteFile,
   getAgingHistory, getAgingStatus, getFiles, getIngestStatus, getRunHistory,
   getPendingByAccount,
@@ -56,6 +57,10 @@ export default function Dashboard() {
   const [agingStatus, setAgingStatus] = useState({ loaded: false, row_count: 0, filename: null });
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState("");
+  // Distinct from `error` — this one drives its own unmissable banner (see
+  // the top of the render), not the generic dismissible error list, so
+  // "the backend itself is down" is never just one line among several.
+  const [backendUnreachable, setBackendUnreachable] = useState(false);
 
   // PATCH: past aging report source files — lets the user pick an older
   // snapshot even while a current one is already loaded (kind="aging_report"
@@ -107,6 +112,7 @@ export default function Dashboard() {
   // Used to stop the control bar from inviting an immediate re-run against
   // the exact same statement(s) — see filesAlreadyAnalyzed below.
   const [lastRunFiles, setLastRunFiles] = useState<string[]>([]);
+  const [lastRunId, setLastRunId] = useState<number | null>(null);
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -118,8 +124,17 @@ export default function Dashboard() {
       // manual dismiss. Every other error message stays as manual-dismiss
       // only (see StatusBanners) — this is a deliberate one-off exception.
       setError((prev) => (prev === "Could not connect to backend system." ? "" : prev));
-    } catch {
+      setBackendUnreachable(false);
+    } catch (e: any) {
       setError("Could not connect to backend system.");
+      // e.response is only present when a response actually came back (any
+      // status code) — its total absence means the request never completed
+      // at all (server down, wrong port, CORS block, etc.), which is a
+      // different, more fundamental problem than an ordinary error reply.
+      // That distinction drives the dedicated banner below, so "nothing is
+      // loading because the backend itself is unreachable" never looks the
+      // same as an empty/not-yet-configured state on this page.
+      if (!e?.response) setBackendUnreachable(true);
     }
   }, []);
 
@@ -168,6 +183,7 @@ export default function Dashboard() {
             // so the control bar can tell "same statements, already done"
             // apart from "new statement(s) uploaded, ready to go".
             setLastRunFiles(latest.selected_files ?? []);
+            setLastRunId(latest.run_id ?? null);
           }
         } catch {}
       }
@@ -182,7 +198,11 @@ export default function Dashboard() {
     try {
       const res = await getAgingHistory();
       setAgingHistory(res.data.items || []);
-    } catch {}
+      setBackendUnreachable(false);
+    } catch (e: any) {
+      setError((prev) => prev || getErrorMessage(e, "Could not load aging report history."));
+      if (!e?.response) setBackendUnreachable(true);
+    }
   }, []);
 
   const handleSelectAgingSource = async (sourceFileId: number) => {
@@ -211,7 +231,15 @@ export default function Dashboard() {
     try {
       const res = await getAgingStatus();
       setAgingStatus(res.data);
-    } catch {}
+      setBackendUnreachable(false);
+    } catch (e: any) {
+      // Surfaced (not silent) — a real failure here must never look
+      // identical to "no aging file loaded yet", which is what a silent
+      // catch produced: the same "Not Loaded" empty-state either way, with
+      // zero signal to tell the two apart.
+      setError((prev) => prev || getErrorMessage(e, "Could not load aging report status."));
+      if (!e?.response) setBackendUnreachable(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -229,6 +257,7 @@ export default function Dashboard() {
         const latest  = histRes.data.data?.[0];
         if (latest?.status === "completed") {
           setLastRunFiles(latest.selected_files ?? []);
+          setLastRunId(latest.run_id ?? null);
         }
       } catch {}
     })();
@@ -574,6 +603,20 @@ export default function Dashboard() {
   const fmtElapsed = (s: number) => `${Math.floor(s / 60).toString().padStart(2,"0")}:${(s % 60).toString().padStart(2,"0")}`;
   return (
 			<div className="max-w-5xl mx-auto space-y-5">
+				{backendUnreachable && (
+					<div className="flex items-start gap-3 bg-red-50 border-2 border-red-300 rounded-2xl px-5 py-4 shadow-sm">
+						<AlertTriangle size={18} className="text-red-500 shrink-0 mt-0.5" />
+						<div>
+							<p className="text-sm font-black text-red-700 uppercase tracking-wide">
+								Can't reach the backend
+							</p>
+							<p className="text-[13px] text-red-600 mt-0.5">
+								None of this page's data could load — the API server didn't respond at all (not just an error reply).
+								Check that it's running and reachable, then this will clear on its own once it's back.
+							</p>
+						</div>
+					</div>
+				)}
 				<WelcomeHero userDisplayName={userDisplayName} />
 
 				<StatusBanners
@@ -612,6 +655,7 @@ export default function Dashboard() {
 					isRunning={isRunning}
 					loading={loading}
 					filesAlreadyAnalyzed={filesAlreadyAnalyzed}
+					lastRunId={lastRunId}
 					agingStatus={agingStatus}
 					files={files}
 					accountGroups={accountGroups}

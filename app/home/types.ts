@@ -115,7 +115,7 @@ export interface Metrics {
 }
 
 export const METRIC_CONFIG = {
-  unidentified:       { name: "Unidentified",         color: "#E4405D" },
+  unidentified:       { name: "Unidentified",         color: "#090738" },
   needsRemittance:    { name: "Needs Remittance",     color: "#F0A83C" },
   readyForOracle:     { name: "Ready for Oracle",     color: "#1F9254" },
   conflictException:  { name: "Conflict / Exception", color: "#C0392B" },

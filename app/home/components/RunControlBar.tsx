@@ -6,6 +6,7 @@ interface RunControlBarProps {
   isRunning: boolean;
   loading: boolean;
   filesAlreadyAnalyzed: boolean;
+  lastRunId: number | null;
   agingStatus: { loaded: boolean };
   files: FileInfo[];
   accountGroups: AccountGroup[];
@@ -21,7 +22,7 @@ interface RunControlBarProps {
  * self-contained component rather than split further.
  */
 export default function RunControlBar({
-  isRunning, loading, filesAlreadyAnalyzed, agingStatus, files,
+  isRunning, loading, filesAlreadyAnalyzed, lastRunId, agingStatus, files,
   accountGroups, isAccountSelected, elapsedSeconds, fmtElapsed, onStart,
 }: RunControlBarProps) {
   const selectedCount = accountGroups.filter((g) => isAccountSelected(g.key)).length;
@@ -90,6 +91,14 @@ export default function RunControlBar({
               </span>
               <p className="text-[10px] text-amber-600 mt-0.5">
                 These statement(s) were included in the last completed run. Upload a new statement to run analysis again.
+                {lastRunId != null && (
+                  <>
+                    {" "}
+                    <a href={`/analysis-history?run_id=${lastRunId}`} className="underline font-bold hover:text-amber-800">
+                      View that run →
+                    </a>
+                  </>
+                )}
               </p>
             </div>
           ) : agingStatus.loaded && files.length > 0 ? (
@@ -110,7 +119,7 @@ export default function RunControlBar({
                     analyze.{" "}
                     {duplicateRunIds.length === 1 ? (
                       <a
-                        href={`/analysis-history/row/${duplicateRunIds[0]}`}
+                        href={`/analysis-history?run_id=${duplicateRunIds[0]}`}
                         className="underline font-bold text-white hover:text-white/80"
                       >
                         View that run →
@@ -128,7 +137,7 @@ export default function RunControlBar({
                   <>
                     Some selected statement(s) are already-processed duplicates (
                     {duplicateRunIds.length === 1 ? (
-                      <a href={`/analysis-history/row/${duplicateRunIds[0]}`} className="underline font-bold text-white hover:text-white/80">
+                      <a href={`/analysis-history?run_id=${duplicateRunIds[0]}`} className="underline font-bold text-white hover:text-white/80">
                         view that run
                       </a>
                     ) : (

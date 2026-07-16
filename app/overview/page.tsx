@@ -127,9 +127,9 @@ export default function OverviewPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-bold text-[#222222]">Overview</h1>
-        <p className="text-sm text-[#6B7688] mt-1">
+        {/* <p className="text-sm text-[#6B7688] mt-1">
           Metrics and category breakdowns across your analyses.
-        </p>
+        </p> */}
       </div>
 
       {error && (
@@ -152,6 +152,7 @@ export default function OverviewPage() {
         dm={dm}
         g={g}
         ga={ga}
+        totalUsdAmount={totalValue}
         fmtUsd={fmtUsd}
       />
 

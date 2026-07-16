@@ -114,9 +114,9 @@ export default function AiUsagePage() {
         <h1 className="text-xl font-bold text-[#222222] flex items-center gap-2">
           <Sparkles size={18} className="text-[#222222]" /> AI Usage
         </h1>
-        <p className="text-sm text-[#6B7688] mt-1">
+        {/* <p className="text-sm text-[#6B7688] mt-1">
           Token consumption and cost from Claude's Layer 2B AI extraction fallback, across all analyses.
-        </p>
+        </p> */}
       </div>
 
       {error && (

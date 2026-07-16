@@ -1,6 +1,6 @@
 "use client";
 import {
-  Ban, Calendar, ClipboardCheck, DollarSign, FileText, HelpCircle, Layers, Sparkles, AlertTriangle,
+  Ban, Calendar, ClipboardCheck, FileText, HelpCircle, Layers, Sparkles, AlertTriangle,
 } from "lucide-react";
 import MetricsFilterBar from "./MetricsFilterBar";
 import MetricsKpiGrid from "./MetricsKpiGrid";
@@ -31,6 +31,7 @@ interface DashboardMetricsCardProps {
   dm: Metrics | { total_rows_ingested: number; identified?: number; groups: Metrics["groups"] };
   g: Metrics["groups"];
   ga: Record<string, number>;
+  totalUsdAmount: number;
   fmtUsd: (n: number) => string;
 }
 
@@ -47,7 +48,7 @@ export default function DashboardMetricsCard(props: DashboardMetricsCardProps) {
     customStartDate, setCustomStartDate, customEndDate, setCustomEndDate,
     doFetchMetrics, bankOptions, buOptions, userOptions,
     selectedBank, setSelectedBank, selectedBU, setSelectedBU, selectedUser, setSelectedUser,
-    totalStatements, dm, g, ga, fmtUsd,
+    totalStatements, dm, g, ga, totalUsdAmount, fmtUsd,
   } = props;
 
   return (
@@ -76,7 +77,7 @@ export default function DashboardMetricsCard(props: DashboardMetricsCardProps) {
         emoji="✓" title="System Matching Results" size="sm"
         items={[
           { icon: <Sparkles size={12} className="text-emerald-500" />, label: "Identified Matches", value: dm.identified ?? 0, sub: "Customer name or invoice number found", accent: "#10b981" },
-          { icon: <HelpCircle size={12} className="text-red-400" />, label: "Unidentified (Blocked)", value: g.unidentified ?? 0, sub: "No matching customer name or invoice number", accent: "#e11d48" },
+          { icon: <HelpCircle size={12} className="text-blue-500" />, label: "Unidentified (Blocked)", value: g.unidentified ?? 0, sub: "No matching customer name or invoice number", accent: "#2563EB" },
           { icon: <Calendar size={12} className="text-amber-500" />, label: "Needs Remittance Follow-Up", value: g.needs_remittance ?? 0, sub: "Variance: amount, date, invoice mapping, etc", accent: "#f59e0b" },
           { icon: <Sparkles size={12} className="text-emerald-500" />, label: "Ready for Approval", value: g.ready_for_oracle ?? 0, sub: "Exact match, one-click post to Oracle", accent: "#10b981" },
         ]}
@@ -98,16 +99,52 @@ export default function DashboardMetricsCard(props: DashboardMetricsCardProps) {
         ]}
       />
 
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pt-2 pb-4 border-b border-gray-100">
+        <div>
+          <h2 className="text-xs font-black text-primary uppercase tracking-wider">
+            Value Breakdown{" "}
+            <span className="ml-2 text-[10px] font-bold bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-xs">USD</span>
+          </h2>
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            All credited amounts across categories, converted to USD.
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Total</div>
+          <div className="text-lg font-black text-primary">{fmtUsd(totalUsdAmount)}</div>
+        </div>
+      </div>
+
       <MetricsKpiGrid
-        emoji="💵" title="Value Breakdown" size="sm" columns="grid-cols-2 lg:grid-cols-3"
-        formatValue={fmtUsd}
+        emoji="📊" title="Inbound Transactions" formatValue={fmtUsd} valueClassName="text-lg font-black text-primary"
         items={[
-          { icon: <DollarSign size={12} className="text-red-400" />, label: "Unidentified", value: ga.unidentified ?? 0, sub: "No matching customer or invoice", accent: "#e11d48" },
-          { icon: <DollarSign size={12} className="text-amber-500" />, label: "Needs Remittance", value: ga.needs_remittance ?? 0, sub: "Awaiting remittance follow-up", accent: "#f59e0b" },
-          { icon: <DollarSign size={12} className="text-emerald-500" />, label: "Ready for Oracle", value: ga.ready_for_oracle ?? 0, sub: "Exact match, ready to post", accent: "#10b981" },
-          { icon: <DollarSign size={12} className="text-red-500" />, label: "Conflict / Exception", value: ga.conflict_exception ?? 0, sub: "Mismatch needing SPOC review", accent: "#dc2626" },
-          { icon: <DollarSign size={12} className="text-[#222222]" />, label: "Processed", value: ga.processed ?? 0, sub: "Approved and posted to Oracle AR", accent: "#222222" },
-          { icon: <DollarSign size={12} className="text-gray-400" />, label: "Rejected", value: ga.rejected ?? 0, sub: "Rejected by system or SPOC", accent: "#6b7280" },
+          { icon: <Layers size={12} className="text-[#222222]" />, label: "Total Amount Ingested", value: totalUsdAmount, sub: "All credited amounts, converted to USD", accent: "#222222" },
+        ]}
+      />
+
+      <MetricsKpiGrid
+        emoji="✓" title="System Matching Results" size="sm" formatValue={fmtUsd} valueClassName="text-sm font-black text-primary leading-tight"
+        items={[
+          { icon: <Sparkles size={12} className="text-emerald-500" />, label: "Identified Matches", value: Math.max(totalUsdAmount - (ga.unidentified ?? 0), 0), sub: "Customer name or invoice number found", accent: "#10b981" },
+          { icon: <HelpCircle size={12} className="text-blue-500" />, label: "Unidentified (Blocked)", value: ga.unidentified ?? 0, sub: "No matching customer name or invoice number", accent: "#2563EB" },
+          { icon: <Calendar size={12} className="text-amber-500" />, label: "Needs Remittance Follow-Up", value: ga.needs_remittance ?? 0, sub: "Variance: amount, date, invoice mapping, etc", accent: "#f59e0b" },
+          { icon: <Sparkles size={12} className="text-emerald-500" />, label: "Ready for Approval", value: ga.ready_for_oracle ?? 0, sub: "Exact match, one-click post to Oracle", accent: "#10b981" },
+        ]}
+      />
+
+      <MetricsKpiGrid
+        emoji="⚠️" title="Exceptions & Conflicts" size="sm" columns="grid-cols-2 lg:grid-cols-3" formatValue={fmtUsd} valueClassName="text-sm font-black text-primary leading-tight"
+        items={[
+          { icon: <AlertTriangle size={12} className="text-red-500" />, label: "Conflict / Exception", value: ga.conflict_exception ?? 0, sub: "Mismatch on customer/invoice/amount/OU", accent: "#dc2626" },
+          { icon: <Ban size={12} className="text-gray-400" />, label: "Rejected", value: ga.rejected ?? 0, sub: "Rejected by system or SPOC", accent: "#6b7280" },
+          { icon: <Ban size={12} className="text-gray-400" />, label: "Post Failed", value: ga.post_failed ?? 0, sub: "Approved but Oracle post errored", accent: "#6b7280" },
+        ]}
+      />
+
+      <MetricsKpiGrid
+        emoji="✅" title="Completed" formatValue={fmtUsd} valueClassName="text-lg font-black text-primary"
+        items={[
+          { icon: <ClipboardCheck size={12} className="text-emerald-600" />, label: "Invoice Mapped", value: ga.processed ?? 0, sub: "Approved and invoice-mapped in Oracle AR", accent: "#222222" },
         ]}
       />
     </div>
