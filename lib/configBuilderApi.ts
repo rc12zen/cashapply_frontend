@@ -3,8 +3,20 @@
 // account-config management). Own axios instance, same baseURL as lib/api.ts.
 import axios from "axios";
 import type { AccountLocator, LocateAccountResult, SaveRecipePayload } from "./configBuilderTypes";
+import { getCookie } from "./api";
 
 const API = axios.create({ baseURL: "http://localhost:8000" });
+
+// Same dev-user bypass as lib/api.ts — without this, builder_save's
+// get_optional_current_user always resolves to None and config-creation
+// activity logs never get written.
+API.interceptors.request.use((config) => {
+  const devUser = getCookie("login_user_email_stub");
+  if (devUser) {
+    config.headers.set("X-Dev-User", devUser);
+  }
+  return config;
+});
 
 // ── Wizard ──────────────────────────────────────────────────────────────────
 // Upload a report for the wizard WITHOUT triggering ingestion (config-building
