@@ -123,6 +123,8 @@ export interface SaveRecipePayload {
   // and passed explicitly by the wizard since configBuilderApi's axios has no
   // dev-user interceptor. Shown as "added by"; omitted if unknown.
   created_by?: string;
+  // Source statement filename this recipe was built from — activity log only.
+  filename?: string;
 }
 
 // One saved version of a recipe (metadata only — the recipe body is not carried

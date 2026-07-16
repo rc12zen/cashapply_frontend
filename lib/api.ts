@@ -14,7 +14,7 @@ export const API = axios.create({ baseURL: "http://localhost:8000" });
 // ID tokens via MSAL, with no `X-Dev-User` header at all (see design doc
 // §1.1). This interceptor is a local/test convenience so the RBAC and audit
 // features are exercisable without a real Azure app registration.
-function getCookie(name: string): string | null {
+export function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null; // SSR guard
   const match = document.cookie.match(
     new RegExp(`(?:^|; )${name.replace(/([.$?*|{}()[\]\\/+^])/g, "\\$1")}=([^;]*)`)

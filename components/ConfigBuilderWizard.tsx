@@ -349,6 +349,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         business_unit: businessUnit.trim(),
         functional_currency: functionalCurrency.trim() || undefined,
         created_by: readLoginStub(),
+        filename,
       });
       onSaved(accountNumber.trim());
     } catch (e: any) {

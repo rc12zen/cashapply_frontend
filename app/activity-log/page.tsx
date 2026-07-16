@@ -43,8 +43,7 @@ interface ActivityLogEntry {
 // distinct, worth-tracking action that didn't have its own pill before.
 const PILLS = [
 	{ key: "analysis_run", label: "Analysis Run" },
-	{ key: "config_creation", label: "Configure Creation" },
-	{ key: "manual_mapping", label: "Manual Invoice Mapping" },
+	{ key: "manual_mapping", label: "Config Creation" },
 	{ key: "approved", label: "Accepted" },
 	{ key: "rejected", label: "Rejected" },
 	{ key: null, label: "All Logs" },
@@ -58,6 +57,9 @@ function describeAction(entry: ActivityLogEntry): { label: string; icon: React.R
 	}
 	if (a.startsWith("run.") || a.startsWith("statement.ingest")) {
 		return { label: "Analysis Run", icon: <Play size={11} />, styles: "bg-purple-50 text-purple-700 border-purple-200" };
+	}
+	if (a.startsWith("config.create")) {
+		return { label: "Config Creation", icon: <Link2 size={11} />, styles: "bg-indigo-50 text-indigo-700 border-indigo-200" };
 	}
 	if (a.startsWith("hitl.manual_mapping")) {
 		return { label: "Manual Invoice Mapping", icon: <Link2 size={11} />, styles: "bg-indigo-50 text-indigo-700 border-indigo-200" };
