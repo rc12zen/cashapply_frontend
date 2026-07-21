@@ -80,7 +80,7 @@ function AzureSignInScreen() {
 					<rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
 					<rect x="11" y="11" width="9" height="9" fill="#ffb900" />
 				</svg>
-				{isLoading ? "Redirecting..." : "Sign in with Microsoft"}
+				{isLoading ? "Redirecting..." : "SSO"}
 				{!isLoading && (
 					<ArrowRight size={12} className="opacity-70 group-hover:translate-x-0.5 transition-transform" />
 				)}
@@ -88,7 +88,7 @@ function AzureSignInScreen() {
 
 			<div className="pt-6 mt-6 border-t border-gray-100 text-center">
 				<p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
-					&copy; Zensar Technologies &bull; For Internal Use Only &bull; PoC v1.0
+					&copy; Zensar Technologies &bull; For Internal Use Only &bull; v1.2
 				</p>
 			</div>
 		</div>
