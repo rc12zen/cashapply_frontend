@@ -163,6 +163,7 @@ export const getRunHistory = (
   bankName?: string,
   businessUnit?: string,
   triggeredBy?: string,
+  status?: string,
 ) => {
   const params: Record<string, string | number> = { page, page_size: pageSize };
   if (dateFrom) params.date_from = dateFrom;
@@ -170,6 +171,7 @@ export const getRunHistory = (
   if (bankName)     params.bank_name     = bankName;
   if (businessUnit) params.business_unit = businessUnit;
   if (triggeredBy)  params.triggered_by  = triggeredBy;
+  if (status)       params.status        = status;
   return API.get("/api/run/history", { params });
 };
 
