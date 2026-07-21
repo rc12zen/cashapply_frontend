@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 /**
  * components/row-detail/RawResponseViewer.tsx
  * ==============================================
