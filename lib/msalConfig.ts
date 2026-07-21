@@ -43,15 +43,26 @@ export const msalConfig: Configuration = {
     authority: `https://login.microsoftonline.com/${tenantId || "common"}`,
     redirectUri,
     postLogoutRedirectUri: "/",
-    navigateToLoginRequestUrl: true,
+    // navigateToLoginRequestUrl intentionally omitted: not part of
+    // BrowserAuthOptions' type in msal-browser v5 (moved internal to the
+    // redirect flow -- confirmed against the installed package's own
+    // source, where it's read as `options?.navigateToLoginRequestUrl ??
+    // true`). It already defaults to true, which is what we want, so
+    // omitting it here changes no behavior.
   },
   cache: {
     // In-memory + sessionStorage (MSAL's own cache), NOT localStorage —
     // matches "store nothing manually" in the requirements; MSAL owns the
     // token cache lifecycle entirely. Cleared when the browser tab closes,
     // which is the right tradeoff for a shared/kiosk-style workstation.
+    //
+    // storeAuthStateInCookie intentionally omitted: not part of
+    // CacheOptions' type in msal-browser v5 (confirmed against the
+    // installed package -- that type now only has cacheLocation and
+    // cacheRetentionDays). It was an opt-in helper for some older
+    // browsers that aggressively cleared sessionStorage; cacheLocation
+    // above already covers our actual storage requirement.
     cacheLocation: "sessionStorage",
-    storeAuthStateInCookie: false,
   },
   system: {
     loggerOptions: {
