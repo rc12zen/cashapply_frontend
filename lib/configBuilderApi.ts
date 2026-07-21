@@ -1,10 +1,14 @@
 // lib/configBuilderApi.ts
 // API client for the account-based Bank Data Ingestion Layer (Config Builder +
-// account-config management). Own axios instance, same baseURL as lib/api.ts.
-import axios from "axios";
+// account-config management). Reuses the SHARED axios instance from lib/api.ts
+// so every request carries the same auth header the rest of the app sends
+// (X-Dev-User from the login cookie in local dev; Azure Bearer token in prod)
+// and inherits its 401 -> login redirect. This module previously used its own
+// bare axios.create() with NO interceptor, which sent no credentials — fine
+// while these endpoints were unauthenticated, but 401 once they gained
+// require_permission("config:manage") gating.
+import { API } from "./api";
 import type { AccountLocator, LocateAccountResult, SaveRecipePayload } from "./configBuilderTypes";
-
-const API = axios.create({ baseURL: "http://localhost:8000" });
 
 // ── Wizard ──────────────────────────────────────────────────────────────────
 // Upload a report for the wizard WITHOUT triggering ingestion (config-building
