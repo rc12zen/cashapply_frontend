@@ -17,6 +17,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getProcessedShortages, getFilterOptions } from "@/lib/api";
+import { usePageGuard } from "@/lib/usePageGuard";
+import PageAccessDenied from "@/components/PageAccessDenied";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -249,6 +251,7 @@ export default function ShortageReviewPage() {
 }
 
 function ShortageReviewPageInner() {
+  const { allowed, checking } = usePageGuard("canViewData");
   const router       = useRouter();
   const searchParams = useSearchParams();
   const runId        = searchParams.get("run_id") ? Number(searchParams.get("run_id")) : undefined;
@@ -326,6 +329,9 @@ function ShortageReviewPageInner() {
   const shortageCount     = data?.shortage.rows.length || 0;
   const fullPaymentCount  = data?.full_payment.rows.length || 0;
   const totalShortageAmt  = (data?.shortage.rows || []).reduce((s, r) => s + r.total_shortage, 0);
+
+  if (checking) return null;
+  if (!allowed) return <PageAccessDenied />;
 
   return (
     <>

@@ -40,7 +40,11 @@ function buildDateRange(period: string, cStart: string, cEnd: string) {
   return { date_from: undefined, date_to: undefined };
 }
 
+import { usePageGuard } from "@/lib/usePageGuard";
+import PageAccessDenied from "@/components/PageAccessDenied";
+
 export default function AiUsagePage() {
+  const { allowed, checking } = usePageGuard("canViewData");
   const [summary, setSummary] = useState<AiUsageSummary | null>(null);
   const [totals, setTotals]   = useState<AiUsageTotals | null>(null);
   const [recentRuns, setRecentRuns] = useState<AiUsageRecentRun[]>([]);
@@ -107,6 +111,9 @@ export default function AiUsagePage() {
       setDownloading(false);
     }
   };
+
+  if (checking) return null;
+  if (!allowed) return <PageAccessDenied />;
 
   return (
     <div className="space-y-6 max-w-5xl">

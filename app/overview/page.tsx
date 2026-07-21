@@ -26,7 +26,11 @@ const EMPTY_GROUPS: Metrics["groups"] = {
 };
 const EMPTY_GA: Record<string, number> = {};
 
+import { usePageGuard } from "@/lib/usePageGuard";
+import PageAccessDenied from "@/components/PageAccessDenied";
+
 export default function OverviewPage() {
+  const { allowed, checking } = usePageGuard("canViewData");
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [error, setError]     = useState("");
   const [loading, setLoading] = useState(true);
@@ -122,6 +126,9 @@ export default function OverviewPage() {
   const totalValue = valueData.reduce((sum, d) => sum + d.value, 0);
   const fmtUsd = (v: number) =>
     v >= 1000 ? `$${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}K` : `$${v.toLocaleString()}`;
+
+  if (checking) return null;
+  if (!allowed) return <PageAccessDenied />;
 
   return (
     <div className="space-y-6">

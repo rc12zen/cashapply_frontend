@@ -1,19 +1,26 @@
 import axios from "axios";
+import { IS_LOCAL_DEV } from "./msalConfig";
+import { getAccessToken } from "./msalToken";
 
-export const API = axios.create({ baseURL: "http://localhost:8000" });
+// Points at the backend API. NEXT_PUBLIC_API_BASE_URL must be set for
+// UAT/prod (there's no sensible default other than localhost, which only
+// makes sense for local dev) -- see .env.uat.
+export const API = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000",
+});
 
-// ── Auth (dev/test SSO bypass — see backend design doc §1.3) ──────────────
+// ── Auth ──────────────────────────────────────────────────────────────────
 //
-// The existing login screen (app/page.tsx) already sets a
-// `login_user_email_stub` cookie on "sign in" — this was previously
-// decorative (backend had no auth at all). It's now wired to the backend's
-// dev SSO bypass: every request carries that email as `X-Dev-User`, which
-// the backend only honors when ENVIRONMENT=local (see app/auth/bypass.py).
+// LOCAL DEV (APP_ENV=local): unchanged — the login screen (app/page.tsx)
+// sets a `login_user_email_stub` cookie, sent as X-Dev-User on every
+// request. Only honored by the backend when APP_ENV=local (see
+// app/auth/bypass.py) — never reachable in UAT/prod.
 //
-// This is NOT how production auth works — production uses real Azure Entra
-// ID tokens via MSAL, with no `X-Dev-User` header at all (see design doc
-// §1.1). This interceptor is a local/test convenience so the RBAC and audit
-// features are exercisable without a real Azure app registration.
+// UAT/PROD (APP_ENV!=local): every request instead carries a real Azure
+// AD access token as `Authorization: Bearer <token>`, acquired via MSAL
+// (see lib/msalToken.ts — acquireTokenSilent first, falling back to an
+// interactive redirect only if the session truly needs re-auth). No
+// X-Dev-User header is ever sent in this mode.
 function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null; // SSR guard
   const match = document.cookie.match(
@@ -22,18 +29,26 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-API.interceptors.request.use((config) => {
-  const devUser = getCookie("login_user_email_stub");
-  if (devUser) {
-    config.headers.set("X-Dev-User", devUser);
+API.interceptors.request.use(async (config) => {
+  if (IS_LOCAL_DEV) {
+    const devUser = getCookie("login_user_email_stub");
+    if (devUser) {
+      config.headers.set("X-Dev-User", devUser);
+    }
+    return config;
+  }
+
+  const token = await getAccessToken();
+  if (token) {
+    config.headers.set("Authorization", `Bearer ${token}`);
   }
   return config;
 });
 
-// A 401 means the dev-bypass cookie is missing/unrecognized (or, in a real
-// Azure deployment, the token expired) — bounce to the login screen rather
-// than leaving the UI in a half-authenticated state with silently-failing
-// requests.
+// A 401 means: local dev — the dev-bypass cookie is missing/unrecognized;
+// UAT/prod — the Azure token is missing, expired, or the account isn't
+// onboarded. Either way, bounce to the login screen rather than leaving
+// the UI in a half-authenticated state with silently-failing requests.
 API.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -54,12 +69,26 @@ export const getMe = () => API.get("/api/auth/me");
 // ── Admin: user management (admin-only; gated on "user:manage") ─────────────────
 export const getUsers = () => API.get("/api/admin/users");
 export const getRoles = () => API.get("/api/admin/roles");
-export const onboardUser = (payload: { email: string; display_name?: string; role_name: string }) =>
+// A user can be assigned one or more roles at once -- role_names is the
+// COMPLETE set (backend replaces, doesn't merge -- see bff/admin_routes.py).
+export const onboardUser = (payload: { email: string; display_name?: string; role_names: string[] }) =>
 	API.post("/api/admin/users", payload);
-export const updateUser = (id: number, payload: { display_name?: string; role_name?: string }) =>
+export const updateUser = (id: number, payload: { display_name?: string; role_names?: string[] }) =>
 	API.put(`/api/admin/users/${id}`, payload);
 export const setUserActive = (id: number, is_active: boolean) =>
 	API.put(`/api/admin/users/${id}/active`, { is_active });
+
+// ── Bank Accounts (nav info page; gated on "run:view" to view, ─────────────────
+// "config:manage" to edit -- see bff/bank_accounts_routes.py) ──────────────────
+export const getBankAccounts = () => API.get("/api/bank-accounts");
+export const getBusinessUnitOptions = () => API.get("/api/bank-accounts/business-units");
+// Changing an account's Business Unit(s) only affects analysis runs started
+// AFTER the change -- already-completed runs keep whatever was current when
+// they ran (see bff/bank_accounts_routes.py's module docstring).
+export const updateBankAccountBusinessUnits = (
+	id: number,
+	payload: { primary_ou_number: string; additional_ou_numbers?: string[] },
+) => API.put(`/api/bank-accounts/${id}/business-units`, payload);
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 export const getFiles        = ()                         => API.get("/api/run/files");
@@ -368,6 +397,11 @@ export const getBreakupAnalysis = (id: number) =>
 export const getAbbreviations    = ()                      => API.get("/api/config/abbreviations");
 export const updateAbbreviations = (abbreviations: object) => API.put("/api/config/abbreviations", { abbreviations });
 export const getAgingStatus      = ()                      => API.get("/api/config/aging-status");
+// Is AI extraction (Layer 2B's fallback pass) actually usable right now --
+// not just "is a key present". See bff/config_routes.py's /ai-status /
+// extraction/ai_providers.py. Cached briefly server-side; pass force=true
+// to bypass that (wired to a "Recheck" button).
+export const getAiStatus         = (force = false)          => API.get("/api/config/ai-status", { params: force ? { force: true } : {} });
 export const refreshAging        = ()                      => API.post("/api/config/refresh-aging");
 
 /**

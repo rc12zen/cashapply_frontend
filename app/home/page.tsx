@@ -17,16 +17,19 @@
  *     handleStatementUpload's shape.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import {deleteFile,
   getAgingHistory, getAgingStatus, getFiles, getIngestStatus, getRunHistory,
-  getPendingByAccount,
+  getPendingByAccount, getMe,
   getStatus, reingestStatement, selectAgingSource, startRun,
   uploadStatement,
 } from "@/lib/api";
+import { isViewerRoles } from "@/lib/permissions";
 import { detectForFile } from "@/lib/configBuilderApi";
 import { getErrorMessage } from "@/lib/errorMessage";
 import ConfigBuilderWizard from "@/components/ConfigBuilderWizard";
+import AiStatusBadge from "./components/AiStatusBadge";
 import ConfigResolveDialog from "@/components/ConfigResolveDialog";
 
 import WelcomeHero from "./components/WelcomeHero";
@@ -40,6 +43,7 @@ import {
 } from "./types";
 
 export default function Dashboard() {
+  const router = useRouter();
   const [files, setFiles]             = useState<FileInfo[]>([]);
   // PATCH: account-level pending counts + which accounts are checked to be
   // included in the next run. Keyed by String(bank_account_id), or
@@ -91,6 +95,12 @@ export default function Dashboard() {
   const [resolveState, setResolveState]   = useState<{ filename: string; candidates: ConfigCandidate[]; mode: "ambiguous" | "reconfigure" } | null>(null);
 
   const [userDisplayName, setUserDisplayName] = useState("Admin User");
+  // Viewer holds no permissions at all -- this page renders ONLY the
+  // Welcome hero for them (see the early return near the bottom of this
+  // component) and skips every data-fetching effect below, so a Viewer
+  // never triggers the now-guarded (run:view) backend calls this page
+  // otherwise makes on mount.
+  const [isViewer, setIsViewer] = useState(false);
   const [successMessage, setSuccessMessage]   = useState("");
   // Persistent (no auto-dismiss) notice for "needs configuration" uploads —
   // separate from the success toast queue below, which is for transient
@@ -243,15 +253,32 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    fetchFiles();
-    fetchPendingByAccount();
-    fetchAgingHistory();
-    fetchAgingStatus();
     const match = document.cookie.match(/(?:^|; )login_user_email_stub=([^;]*)/);
     if (match?.[1]) setUserDisplayName(decodeURIComponent(match[1]).split("@")[0]);
-    // PATCH: seed lastRunFiles from the most recent completed run so a page
-    // refresh doesn't forget that these statements were already analyzed.
+
     (async () => {
+      // Resolve the role FIRST -- a Viewer holds no permissions at all, so
+      // every one of the calls below (all now gated on "run:view" or
+      // similar server-side) would just 403. This page renders only the
+      // Welcome hero for a Viewer (see the early return further down).
+      let viewer = false;
+      try {
+        const me = await getMe();
+        viewer = isViewerRoles(me.data?.roles ?? null);
+      } catch {
+        // 401 handled globally by lib/api.ts's interceptor; treat unknown
+        // role as non-viewer here so a transient /me failure doesn't hide
+        // the whole dashboard behind a false Viewer gate.
+      }
+      setIsViewer(viewer);
+      if (viewer) return;
+
+      fetchFiles();
+      fetchPendingByAccount();
+      fetchAgingHistory();
+      fetchAgingStatus();
+      // PATCH: seed lastRunFiles from the most recent completed run so a page
+      // refresh doesn't forget that these statements were already analyzed.
       try {
         const histRes = await getRunHistory(1, 1);
         const latest  = histRes.data.data?.[0];
@@ -282,6 +309,7 @@ export default function Dashboard() {
   useEffect(() => {
     const resync = () => {
       if (document.visibilityState === "hidden") return;
+      if (isViewer) return; // no permission to fetch these -- and nothing to show anyway
       if (runStatus.status === "running") return; // the run poller already refreshes
       fetchFiles();
       fetchPendingByAccount();
@@ -292,7 +320,7 @@ export default function Dashboard() {
       window.removeEventListener("focus", resync);
       document.removeEventListener("visibilitychange", resync);
     };
-  }, [fetchFiles, fetchPendingByAccount, runStatus.status]);
+  }, [fetchFiles, fetchPendingByAccount, runStatus.status, isViewer]);
 
   useEffect(() => {
     if (runStatus.status !== "running") {
@@ -601,6 +629,17 @@ export default function Dashboard() {
   const isRunning = runStatus.status === "running";
 
   const fmtElapsed = (s: number) => `${Math.floor(s / 60).toString().padStart(2,"0")}:${(s % 60).toString().padStart(2,"0")}`;
+
+  // Viewer: Home is a working dashboard for people who already have
+  // access -- a Viewer never actually renders it. app/layout.tsx's route
+  // guard normally redirects them before this component even mounts;
+  // this is just a defensive fallback for that brief window right after
+  // /me resolves, in case this page was reached directly.
+  if (isViewer) {
+    router.replace("/welcome");
+    return null;
+  }
+
   return (
 			<div className="max-w-5xl mx-auto space-y-5">
 				{backendUnreachable && (
@@ -651,6 +690,9 @@ export default function Dashboard() {
 				</div>
 
 				{/* CONTROL BAR CARD */}
+				<div className="flex items-center justify-end -mb-1">
+					<AiStatusBadge />
+				</div>
 				<RunControlBar
 					isRunning={isRunning}
 					loading={loading}

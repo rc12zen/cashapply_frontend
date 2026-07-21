@@ -81,7 +81,11 @@ function fmtTimestamp(iso: string | null): string {
 	});
 }
 
+import { usePageGuard } from "@/lib/usePageGuard";
+import PageAccessDenied from "@/components/PageAccessDenied";
+
 export default function ActivityLogPage() {
+	const { allowed, checking } = usePageGuard("canViewActivityLog");
 	const [activePill, setActivePill] = useState<(typeof PILLS)[number]["key"]>("analysis_run");
 	const [dateFrom, setDateFrom] = useState("");
 	const [dateTo, setDateTo] = useState("");
@@ -187,6 +191,8 @@ export default function ActivityLogPage() {
 		setTimeout(() => setPurgeMsg(""), 6000);
 	};
 
+	if (checking) return null;
+	if (!allowed) return <PageAccessDenied />;
 
 	return (
 		<div className="space-y-6 max-w-7xl mx-auto">

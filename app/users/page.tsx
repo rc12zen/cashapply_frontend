@@ -1,27 +1,26 @@
 "use client";
-import { Loader2, Plus, RefreshCw, Search, ShieldCheck, UserPlus, X } from "lucide-react";
+/**
+ * app/users/page.tsx
+ * =====================
+ * User Management. Broken into focused pieces (each responsible for one
+ * thing) rather than one large file:
+ *   - components/users/UsersTable.tsx       — the list/table + pagination
+ *   - components/users/OnboardUserModal.tsx — the "onboard new user" form
+ *   - components/users/RoleMultiSelect.tsx  — shared multi-role picker
+ *     (an Administrator can assign a user ANY NUMBER of roles at once —
+ *     see backend scripts/seed_rbac.py / db/models.py's UserRole table)
+ * This file just orchestrates: fetching, search/pagination state, and the
+ * onboard/role-change/activate handlers.
+ */
+import { Loader2, Plus, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getMe, getRoles, getUsers, onboardUser, setUserActive, updateUser } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
 import RoleLegend from "@/components/RoleLegend";
-
-interface UserRow {
-	id: number;
-	email: string;
-	display_name: string | null;
-	role: string | null;
-	is_active: boolean;
-	last_login_at: string | null;
-	status: "active" | "pending" | "disabled";
-}
-
-interface RoleRow {
-	id: number;
-	name: string;
-	description?: string | null;
-	permissions: string[];
-}
+import UsersTable, { type UserRow } from "@/components/users/UsersTable";
+import OnboardUserModal from "@/components/users/OnboardUserModal";
+import { type RoleOption } from "@/components/users/RoleMultiSelect";
 
 function getCookie(name: string): string | null {
 	if (typeof document === "undefined") return null;
@@ -31,21 +30,6 @@ function getCookie(name: string): string | null {
 	return m ? decodeURIComponent(m[1]) : null;
 }
 
-function fmtTimestamp(iso: string | null): string {
-	if (!iso) return "—";
-	const d = new Date(iso);
-	if (isNaN(d.getTime())) return iso;
-	return d.toLocaleString(undefined, {
-		year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-	});
-}
-
-const STATUS_STYLES: Record<string, string> = {
-	active: "bg-emerald-100 text-emerald-700",
-	pending: "bg-amber-100 text-amber-700",
-	disabled: "bg-gray-200 text-gray-500",
-};
-
 const PAGE_SIZE = 10;
 
 export default function UsersPage() {
@@ -54,7 +38,7 @@ export default function UsersPage() {
 	const [currentEmail, setCurrentEmail] = useState<string | null>(null);
 
 	const [users, setUsers] = useState<UserRow[]>([]);
-	const [roles, setRoles] = useState<RoleRow[]>([]);
+	const [roles, setRoles] = useState<RoleOption[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
 	const [success, setSuccess] = useState("");
@@ -64,9 +48,7 @@ export default function UsersPage() {
 
 	// Onboard modal
 	const [modalOpen, setModalOpen] = useState(false);
-	const [formEmail, setFormEmail] = useState("");
-	const [formName, setFormName] = useState("");
-	const [formRole, setFormRole] = useState("");
+	const [modalError, setModalError] = useState("");
 	const [saving, setSaving] = useState(false);
 
 	// ── Route guard: admin-only. Backend also enforces "user:manage". ───────────
@@ -115,7 +97,7 @@ export default function UsersPage() {
 			? users.filter((u) =>
 				u.email.toLowerCase().includes(q) ||
 				(u.display_name ?? "").toLowerCase().includes(q) ||
-				(u.role ?? "").toLowerCase().includes(q))
+				(u.roles ?? []).some((r) => r.toLowerCase().includes(q)))
 			: users),
 		[users, q],
 	);
@@ -125,34 +107,36 @@ export default function UsersPage() {
 	const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
 	// ── Actions ───────────────────────────────────────────────────────────────
-	const handleOnboard = async (e: React.FormEvent) => {
-		e.preventDefault();
-		if (!formEmail.trim() || !formRole) return;
+	const handleOnboard = async (data: { email: string; display_name?: string; role_names: string[] }) => {
 		setSaving(true);
-		setError("");
+		setModalError("");
 		try {
 			await onboardUser({
-				email: formEmail.trim(),
-				display_name: formName.trim() || undefined,
-				role_name: formRole,
+				email: data.email,
+				display_name: data.display_name,
+				role_names: data.role_names,
 			});
-			showSuccess(`Onboarded ${formEmail.trim()} as ${formRole}. They can sign in with this email.`);
+			showSuccess(`Onboarded ${data.email} as ${data.role_names.join(", ")}. They can sign in with this email.`);
 			setModalOpen(false);
-			setFormEmail(""); setFormName(""); setFormRole("");
 			fetchAll();
 		} catch (err: any) {
-			setError(getErrorMessage(err, "Could not onboard user."));
+			setModalError(getErrorMessage(err, "Could not onboard user."));
 		} finally {
 			setSaving(false);
 		}
 	};
 
-	const handleRoleChange = async (u: UserRow, roleName: string) => {
-		if (roleName === u.role) return;
+	const handleRolesChange = async (u: UserRow, roleNames: string[]) => {
+		const current = u.roles ?? (u.role ? [u.role] : []);
+		if (JSON.stringify([...current].sort()) === JSON.stringify([...roleNames].sort())) return;
+		if (roleNames.length === 0) {
+			showError("A user needs at least one role — use Viewer if they shouldn't have access yet.");
+			return;
+		}
 		setBusyId(u.id);
 		try {
-			await updateUser(u.id, { role_name: roleName });
-			showSuccess(`Updated ${u.email} → ${roleName}.`);
+			await updateUser(u.id, { role_names: roleNames });
+			showSuccess(`Updated ${u.email} → ${roleNames.join(", ")}.`);
 			fetchAll();
 		} catch (err: any) {
 			showError(getErrorMessage(err, "Could not change role."));
@@ -186,7 +170,7 @@ export default function UsersPage() {
 				<div>
 					<h1 className="text-xl font-black text-primary uppercase tracking-wider">Users</h1>
 					<p className="text-xs text-gray-500 mt-0.5 font-medium">
-						Onboard users by email, assign roles, and manage access
+						Onboard users by email, assign one or more roles, and manage access
 					</p>
 				</div>
 			</div>
@@ -219,7 +203,7 @@ export default function UsersPage() {
 							<RefreshCw size={13} className={loading ? "animate-spin" : ""} />
 						</button>
 						<button
-							onClick={() => { setModalOpen(true); setError(""); setFormRole(roles[0]?.name ?? ""); }}
+							onClick={() => { setModalOpen(true); setModalError(""); }}
 							className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider bg-[#222222] hover:bg-[#222222] text-white px-3 py-1.5 rounded-sm cursor-pointer shadow-xs transition-colors"
 						>
 							<Plus size={12} /> Onboard User
@@ -259,67 +243,16 @@ export default function UsersPage() {
 						No users yet. Onboard one to grant access.
 					</div>
 				) : filtered.length === 0 ? (
-					<div className="px-4 py-6 text-xs text-gray-400 text-center">No users match “{search}”.</div>
+					<div className="px-4 py-6 text-xs text-gray-400 text-center">No users match &ldquo;{search}&rdquo;.</div>
 				) : (
-					<div className="overflow-x-auto">
-						<table className="w-full text-xs">
-							<thead>
-								<tr className="text-[10px] font-black uppercase tracking-wider text-gray-400 border-b border-gray-100">
-									<th className="text-left px-4 py-2">User</th>
-									<th className="text-left px-3 py-2">Role</th>
-									<th className="text-left px-3 py-2">Status</th>
-									<th className="text-left px-3 py-2">Last login</th>
-									<th className="text-right px-4 py-2">Actions</th>
-								</tr>
-							</thead>
-							<tbody className="divide-y divide-gray-100">
-								{paged.map((u) => (
-									<tr key={u.id} className="hover:bg-gray-50/50">
-										<td className="px-4 py-2.5">
-											<div className="font-bold text-primary">{u.display_name || u.email.split("@")[0]}</div>
-											<div className="font-mono text-[10px] text-gray-400">{u.email}</div>
-										</td>
-										<td className="px-3 py-2.5">
-											<select
-												value={u.role ?? ""}
-												disabled={busyId === u.id}
-												onChange={(e) => handleRoleChange(u, e.target.value)}
-												className="bg-white border border-gray-300 rounded-sm text-[11px] font-semibold text-primary px-2 py-1 outline-none focus:border-[#222222] cursor-pointer disabled:opacity-50"
-											>
-												{roles.map((r) => (
-													<option key={r.id} value={r.name}>{r.name}</option>
-												))}
-											</select>
-										</td>
-										<td className="px-3 py-2.5">
-											<span className={`text-[9px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded-xs ${STATUS_STYLES[u.status]}`}>
-												{u.status}
-											</span>
-										</td>
-										<td className="px-3 py-2.5 text-gray-500">{fmtTimestamp(u.last_login_at)}</td>
-										<td className="px-4 py-2.5 text-right">
-											{busyId === u.id ? (
-												<Loader2 size={13} className="animate-spin inline text-gray-400" />
-											) : (
-												<button
-													onClick={() => handleToggleActive(u)}
-													disabled={isSelf(u)}
-													title={isSelf(u) ? "You can't deactivate your own account" : undefined}
-													className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-sm cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
-														u.is_active
-															? "text-red-600 hover:bg-red-50"
-															: "text-emerald-700 hover:bg-emerald-50"
-													}`}
-												>
-													{u.is_active ? "Deactivate" : "Reactivate"}
-												</button>
-											)}
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
+					<UsersTable
+						users={paged}
+						roles={roles}
+						busyId={busyId}
+						isSelf={isSelf}
+						onRolesChange={handleRolesChange}
+						onToggleActive={handleToggleActive}
+					/>
 				)}
 
 				{/* Pagination */}
@@ -363,83 +296,14 @@ export default function UsersPage() {
 				<RoleLegend />
 			</div>
 
-			{/* Onboard modal */}
 			{modalOpen && (
-				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !saving && setModalOpen(false)}>
-					<div className="bg-white rounded-sm shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-						<div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-							<div className="flex items-center gap-2">
-								<UserPlus size={14} className="text-[#222222]" />
-								<h3 className="text-xs font-black text-primary uppercase tracking-wider">Onboard User</h3>
-							</div>
-							<button onClick={() => !saving && setModalOpen(false)} className="text-gray-400 hover:text-primary cursor-pointer">
-								<X size={16} />
-							</button>
-						</div>
-						<form onSubmit={handleOnboard} className="p-4 space-y-4">
-							<div className="space-y-1">
-								<label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">Email *</label>
-								<input
-									type="email"
-									required
-									value={formEmail}
-									onChange={(e) => setFormEmail(e.target.value)}
-									placeholder="user@zensar.com"
-									className="w-full bg-white border border-gray-300 rounded-sm text-xs text-primary px-3 py-2 outline-none focus:border-[#222222]"
-								/>
-								<p className="text-[10px] text-gray-400">They sign in with this email (via SSO, or the login screen locally).</p>
-							</div>
-							<div className="space-y-1">
-								<label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">Display name</label>
-								<input
-									type="text"
-									value={formName}
-									onChange={(e) => setFormName(e.target.value)}
-									placeholder="(optional)"
-									className="w-full bg-white border border-gray-300 rounded-sm text-xs text-primary px-3 py-2 outline-none focus:border-[#222222]"
-								/>
-							</div>
-							<div className="space-y-1">
-								<label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">Role *</label>
-								<select
-									required
-									value={formRole}
-									onChange={(e) => setFormRole(e.target.value)}
-									className="w-full bg-white border border-gray-300 rounded-sm text-xs font-semibold text-primary px-3 py-2 outline-none focus:border-[#222222] cursor-pointer"
-								>
-									<option value="" disabled>Select a role…</option>
-									{roles.map((r) => (
-										<option key={r.id} value={r.name}>{r.name}</option>
-									))}
-								</select>
-								{formRole && (
-									<p className="text-[10px] text-gray-400">
-										Grants: {roles.find((r) => r.name === formRole)?.permissions.join(", ") || "—"}
-									</p>
-								)}
-							</div>
-							{error && <div className="text-xs font-bold text-red-700">{error}</div>}
-							<div className="flex justify-end gap-2 pt-1">
-								<button
-									type="button"
-									onClick={() => setModalOpen(false)}
-									disabled={saving}
-									className="text-[11px] font-black uppercase tracking-wider text-gray-500 hover:text-primary px-3 py-2 rounded-sm cursor-pointer disabled:opacity-50"
-								>
-									Cancel
-								</button>
-								<button
-									type="submit"
-									disabled={saving || !formEmail.trim() || !formRole}
-									className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider bg-[#222222] hover:bg-[#222222] text-white px-4 py-2 rounded-sm cursor-pointer shadow-xs disabled:opacity-50"
-								>
-									{saving ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-									{saving ? "Onboarding…" : "Onboard"}
-								</button>
-							</div>
-						</form>
-					</div>
-				</div>
+				<OnboardUserModal
+					roles={roles}
+					saving={saving}
+					error={modalError}
+					onCancel={() => setModalOpen(false)}
+					onSubmit={handleOnboard}
+				/>
 			)}
 		</div>
 	);

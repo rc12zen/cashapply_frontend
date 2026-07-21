@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { approveEntry, rejectEntry, getRowDetail } from "@/lib/api";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -210,8 +211,17 @@ export default function RowDetailDrawer({ recordId, onClose, onApprove, onReject
 		setActionLoading(false);
 	};
 
-	const canApprove = detail?.hitl.status !== "approved" && detail?.validation.status === "passed";
-	const canReject  = detail?.hitl.status !== "rejected";
+	const { flags } = useCurrentUser();
+	// A row can only be approved/rejected when BOTH the row's state allows
+	// it AND the signed-in user's role actually holds the permission —
+	// Analyst can view this drawer but holds neither oracle:post nor
+	// hitl:reject (see scripts/seed_rbac.py), so those buttons never show
+	// for them even on an otherwise-eligible row. The backend enforces the
+	// permission side of this for real either way (require_permission on
+	// /api/hitl/approve and /reject) — hiding the button here is just so an
+	// Analyst isn't shown an action they'd get a 403 back for.
+	const canApprove = detail?.hitl.status !== "approved" && detail?.validation.status === "passed" && flags.canApprove;
+	const canReject  = detail?.hitl.status !== "rejected" && flags.canReject;
 
 	// Status badge
 	const hitlStatus = detail?.hitl.status;

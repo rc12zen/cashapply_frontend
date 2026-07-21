@@ -25,7 +25,11 @@ function fmtTimestamp(iso?: string): string {
 	});
 }
 
+import { usePageGuard } from "@/lib/usePageGuard";
+import PageAccessDenied from "@/components/PageAccessDenied";
+
 export default function ConfigPage() {
+	const { allowed, checking } = usePageGuard("canViewData");
 	// ── Bank Statement Configs ───────────────────────────────────────────────
 	const [bankConfigs, setBankConfigs]       = useState<BankConfigEntry[]>([]);
 	const [configsLoading, setConfigsLoading] = useState(false);
@@ -111,6 +115,9 @@ export default function ConfigPage() {
 		setSaved(true);
 		setTimeout(() => setSaved(false), 3000);
 	};
+
+	if (checking) return null;
+	if (!allowed) return <PageAccessDenied />;
 
 	return (
 		<div className="space-y-6 max-w-5xl mx-auto">

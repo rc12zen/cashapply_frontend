@@ -1,10 +1,10 @@
 /**
  * RoleLegend
  * ============
- * "What each role can see and do" card on the Users page — matches the
- * Users_Page_with_Role_Legend.html reference. Static content: the role set
- * and descriptions are the fixed 5-role model (see backend design doc §7),
- * not fetched — if the role set ever changes, update ROLES below to match.
+ * "What each role can see and do" card on the Users page. Mirrors the
+ * actual 5-role model enforced by the backend — see
+ * backend/scripts/seed_rbac.py, which is the source of truth. Keep these
+ * two in sync if the permission matrix ever changes.
  */
 import { ShieldCheck, PenSquare, Eye, CheckCircle2, ClipboardList, Info } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -12,23 +12,23 @@ import type { LucideIcon } from "lucide-react";
 const ROLES: { icon: LucideIcon; name: string; tag: string; description: string; bg: string; fg: string }[] = [
   {
     icon: ShieldCheck, name: "Administrator", tag: "Full access", bg: "#EEECFB", fg: "#5A4FCF",
-    description: "Read, write, assigns roles, and manages configs. Only entry deletion is restricted.",
+    description: "No constraints — every page, every action, including managing users and configs.",
   },
   {
-    icon: PenSquare, name: "Analyst", tag: "Run + configure", bg: "#E4EEFB", fg: "#222222",
-    description: "Runs analysis, views their own analysis history, and manages configs.",
+    icon: PenSquare, name: "Analyst", tag: "Run + map", bg: "#E4EEFB", fg: "#222222",
+    description: "Runs analysis and maps invoices to accounts. Views data everywhere. Cannot approve, reject, or manage config/users.",
   },
   {
-    icon: Eye, name: "Viewer", tag: "Default, no access", bg: "#EEF1F6", fg: "#6B7688",
-    description: "Assigned automatically on onboarding. Must be changed to another role for actual access.",
-  },
-  {
-    icon: CheckCircle2, name: "Oracle approve", tag: "Approve + review", bg: "#E4F7EC", fg: "#1F9254",
-    description: "Approves or rejects transactions for Oracle posting, and reviews credit transaction analysis.",
+    icon: CheckCircle2, name: "Oracle Operator", tag: "Map + approve", bg: "#E4F7EC", fg: "#1F9254",
+    description: "Maps invoices and approves or rejects transactions for Oracle posting. Views data everywhere. Cannot run analysis.",
   },
   {
     icon: ClipboardList, name: "Auditor", tag: "Read-only", bg: "#FCF1DE", fg: "#B9791A",
-    description: "Views all activity logs. Cannot write or delete anything.",
+    description: "Views data and the activity log everywhere. Cannot run, map, approve, reject, or manage anything.",
+  },
+  {
+    icon: Eye, name: "Viewer", tag: "Default, no access", bg: "#EEF1F6", fg: "#6B7688",
+    description: "Assigned automatically on first sign-in. Restricted to the Welcome page until an administrator assigns a real role.",
   },
 ];
 

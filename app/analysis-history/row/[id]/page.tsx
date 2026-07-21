@@ -43,521 +43,29 @@ import {
 } from "@/lib/api";
 
 import { getErrorMessage } from "@/lib/errorMessage";
+import { usePageGuard } from "@/lib/usePageGuard";
+import PageAccessDenied from "@/components/PageAccessDenied";
 
 // The backend now normalizes every error (including FastAPI's own 422
 // validation errors) into { title, message } server-side — see
 // app/common/errors.py. This just delegates to the shared helper; kept as
 // a named wrapper so call sites below didn't all need renaming.
-function formatApiError(e: any, fallback = "Action failed."): string {
-  return getErrorMessage(e, fallback);
-}
+import {
+  RowDetail, ConfirmedInvoice, MappingInvoiceOption, MappingOptionsResponse, MappingPreviewResponse,
+  formatApiError, getReasonConfig, deriveStatus, fmt, fmtDate, STATUS_CHIP, STATUS_LABEL,
+} from "@/components/row-detail/types";
+import { DataRow, CardShell, CardHead } from "@/components/row-detail/SharedCardPieces";
+import { RemittancePanel } from "@/components/row-detail/RemittancePanel";
+import { OraclePayloadTable } from "@/components/row-detail/OraclePayloadTable";
+import { RawResponseViewer } from "@/components/row-detail/RawResponseViewer";
+import ActionBar from "@/components/row-detail/ActionBar";
+import CrossOUEvidencePanel from "@/components/row-detail/CrossOUEvidencePanel";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface ConfirmedInvoice {
-  invoice_number:     string;
-  customer_name:      string | null;
-  outstanding_amount: number | null;
-  currency:           string | null;
-  ou_number:          string | null;
-  ou_display_name?:   string | null;  // e.g. "DALLAS(205)" — resolved OU the invoice actually belongs to
-  invoice_date:       string | null;
-  remittance_amount:  number | null;
-  computed_amount:    number | null;
-}
-
-interface RowDetail {
-  id:              number;
-  run_id?:         number;
-  status:          string;
-  category?:       string;       // "ready_for_oracle" | "conflict_exception" | …
-  category_label?: string;       // "Ready for Oracle" | …
-  // Special flags from LineItem (added by patched build_row_detail)
-  is_cross_currency?: boolean;   // credited currency != invoice currency
-  is_cross_ledger?:   boolean;   // invoice currency != OU functional currency
-  is_cross_ou?:       boolean;   // payment landed in different OU than invoice
-  // PATCH: persistent record of whether THIS row's current invoice mapping
-  // came from a SPOC manually picking invoice(s) via the Manual Invoice
-  // Mapping card, vs automatic AI/regex extraction or an automatic aging
-  // match. Backend: LineItem.manually_mapped (see db/models.py).
-  manually_mapped?:    boolean;
-  manually_mapped_at?: string | null;
-  manually_mapped_by?: string | null;
-  bank_statement: {
-    bank_name:           string;
-    statement_date:      string | null;
-    narrative:           string;
-    bank_account_number: string;
-    bank_reference:      string | null;
-    credit_amount:       number;
-    currency:            string;
-    business_unit:       string;
-    ou_number:           string;
-    ou_display_name?:    string | null;  // e.g. "PUNE(111)" — resolved OU that RECEIVED the payment
-  };
-  extraction: {
-    method:              string | null;
-    confidence_score:    number | null;
-    extracted_customer:  string | null;
-    primary_invoice:     string | null;
-    all_invoice_numbers: string[];
-    row_type:            string | null;
-    is_matched:          boolean;
-  };
-  confirmed_invoices: ConfirmedInvoice[];
-  sum_outstanding:    number;
-  credit_amount:      number;
-  pipeline:           any[];
-  oracle: {
-    payload:             Record<string, any>;
-    remittance_scenario: string | null;
-    remittance_status:   string | null;
-    hitl_status:         string | null;
-    post_status:         string | null;
-    // PATCH: post_status (above) is the invoice-mapping outcome
-    // (reference_status on the backend) — it means "fully done, posted
-    // with real invoice mapping". receipt_creation_status means only "a
-    // bare receipt exists" — every row gets one during reconciliation,
-    // regardless of category. Don't conflate the two — see the READY
-    // badge logic below, which used to only check whether *a* payload
-    // existed (always true now) instead of what it actually represents.
-    receipt_creation_status?: string | null;
-    post_message:        string | null;
-    oracle_ref_no:       string | null;
-    oracle_status_code:  string | null;
-    standard_receipt_id: string | null;
-    oracle_posted_at:    string | null;
-    // Present on newer backend builds — the actual Oracle response bodies.
-    receipt_response_raw?:   Record<string, any> | null;
-    reference_response_raw?: any[] | null;
-  };
-  remittance: {
-    subject?:           string | null;
-    payer?:             string | null;
-    sender?:            string | null;
-    customer_name?:     string | null;
-    payment_reference?: string | null;
-    payment_date?:      string | null;
-    payment_amount?:    number | null;
-    payment_currency?:  string | null;
-    storage_key?:       string | null;
-    invoices?:          any[];
-    raw_body?:          string | null;
-    filename?:          string | null;
-    // Real, fetchable link for the original .msg/.pdf/.eml App2 archived —
-    // see bff/storage_routes.py. Null when no file was ever stored for
-    // this extraction (shouldn't normally happen, but the panel handles it).
-    download_url?:      string | null;
-  } | null;
-}
-
-// ── Manual invoice mapping types ─────────────────────────────────────────────
-
-interface MappingInvoiceOption {
-  invoice_number:     string;
-  outstanding_amount: number;
-  currency:           string | null;
-  ou_number:          string | null;
-  customer_name:      string | null;
-  customer_number:    string | null;
-}
-
-interface MappingOptionsResponse {
-  customer_identified: boolean;
-  customer_name:       string | null;
-  customers?:          string[];
-  invoices:            MappingInvoiceOption[];
-}
-
-interface MappingPreviewResponse {
-  qualifies:       boolean;
-  tag:             string | null;
-  rule_id:         string;
-  reason_code:     string;
-  message:         string;
-  target_total:    number;
-  received_total:  number;
-  shortfall_pct:   number;
-}
-
-// ── Reason-code → plain English ───────────────────────────────────────────────
-
-const REASON_SENTENCES: Record<string, { text: string; tone: "ok" | "warn" | "error" | "info" }> = {
-  EXACT_MATCH:              { tone: "ok",    text: "Payment exactly covers the invoice outstanding. Ready to post." },
-  ACCEPTABLE_SHORT_PAYMENT: { tone: "ok",    text: "Payment is slightly below the invoice outstanding, but within the accepted short-payment tolerance. Posting is allowed." },
-  UNEXPLAINED_SHORTAGE:     { tone: "warn",  text: "Payment falls short of the invoice outstanding beyond the accepted tolerance. SPOC review is required." },
-  OVERPAYMENT_UNEXPLAINED:  { tone: "warn",  text: "Payment exceeds the invoice outstanding. All overpayments require SPOC review before posting." },
-  CUSTOMER_ONLY_NO_REMIT:   { tone: "info",  text: "Customer was identified but no invoice number was found. Waiting for the customer to send a remittance advice." },
-  NO_SIGNAL:                { tone: "error", text: "Nothing could be extracted — no customer name or invoice number was found in the payment narrative." },
-  CUSTOMER_CONFLICT:        { tone: "error", text: "The customer on the remittance does not match who the aging report shows as the invoice owner." },
-  INVOICE_CUSTOMER_MISMATCH:{ tone: "error", text: "An invoice was found but the customer does not match the aging record. Payment may be applied to the wrong account." },
-  AMBIGUOUS_REMITTANCE:     { tone: "error", text: "More than one remittance email matches this payment. SPOC must select the correct one." },
-  INVOICE_NOT_IN_AGING:     { tone: "error", text: "The invoice number found in the narrative does not appear in the aging report — it may be closed, paid, or misquoted." },
-  POSSIBLE_DUPLICATE_PAYMENT:{ tone: "error", text: "This payment matches an invoice that has already been posted. SPOC must confirm it is not a duplicate." },
-  CROSS_CUSTOMER_SPLIT:     { tone: "warn",  text: "The remittance lists invoices across more than one customer. A manual split is required before posting." },
-  FX_RATE_MISSING:          { tone: "warn",  text: "Payment and invoice are in different currencies but no exchange rate could be resolved. A rate must be provided before posting." },
-  WRONG_OU_PAYMENT:         { tone: "error", text: "The customer's invoices are in a different business unit than the bank account that received this payment. The receipt must be re-routed." },
-  WRONG_OU_SPLIT_REQUIRED:  { tone: "error", text: "An invoice was matched but it belongs to a different business unit. The posting must be re-routed to the correct entity." },
-  DUPLICATE_INVOICE_NO:     { tone: "error", text: "The invoice number appears against more than one customer in the aging report. The match is ambiguous." },
-};
-
-function getReasonConfig(code: string | null | undefined) {
-  if (!code) return { text: "No evaluation result available for this payment.", tone: "info" as const };
-  return REASON_SENTENCES[code] || {
-    text: code.replace(/_/g, " ").replace(/^\w/, c => c.toUpperCase()),
-    tone: "warn" as const,
-  };
-}
-
-// ── Status derivation ─────────────────────────────────────────────────────────
-
-function deriveStatus(oracle: RowDetail["oracle"]) {
-  if (oracle.post_status === "success")   return "processed";
-  if (oracle.hitl_status === "rejected")  return "rejected";
-  if (oracle.post_status === "failed")    return "post_failed";
-  if (oracle.hitl_status === "approved")  return "approved";
-  return "pending";
-}
-
-const STATUS_CHIP: Record<string, string> = {
-  processed:  "bg-emerald-100 text-emerald-700 border-emerald-300",
-  rejected:   "bg-red-100 text-red-700 border-red-300",
-  post_failed:"bg-amber-100 text-amber-700 border-amber-300",
-  approved:   "bg-blue-100 text-blue-700 border-blue-300",
-  pending:    "bg-gray-100 text-gray-600 border-gray-300",
-};
-const STATUS_LABEL: Record<string, string> = {
-  processed: "Processed", rejected: "Rejected",
-  post_failed: "Post Failed", approved: "Approved", pending: "Pending",
-};
-
-// ── Utilities ─────────────────────────────────────────────────────────────────
-
-function fmt(n: number | null | undefined, dp = 2) {
-  if (n == null) return "—";
-  return Number(n).toLocaleString("en-IN", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-}
-function fmtDate(s: string | null | undefined) {
-  if (!s) return "—";
-  try { return new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
-  catch { return s; }
-}
-
-// ── Shared UI pieces ──────────────────────────────────────────────────────────
-
-function DataRow({ label, value, mono = false }: { label: string; value: any; mono?: boolean }) {
-  return (
-    <div className="flex items-start justify-between gap-6 py-2.5 border-b border-gray-100 last:border-0">
-      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider shrink-0 pt-0.5 min-w-[120px]">{label}</span>
-      <span className={`text-[11px] font-semibold text-gray-800 text-right break-all leading-snug ${mono ? "font-mono" : ""}`}>{value ?? "—"}</span>
-    </div>
-  );
-}
-
-function CardShell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bg-white border border-gray-200 rounded-sm shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-      {children}
-    </div>
-  );
-}
-
-function CardHead({ icon, title, right }: { icon: React.ReactNode; title: string; right?: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-gray-100 bg-gray-50/70">
-      <div className="flex items-center gap-2.5">
-        <span className="text-[#222222]">{icon}</span>
-        <span className="text-[10px] font-black text-[#222222] uppercase tracking-widest">{title}</span>
-      </div>
-      {right}
-    </div>
-  );
-}
-
-// ── Remittance panel ──────────────────────────────────────────────────────────
-
-function RemittancePanel({ remittance, allInvoiceNumbers, remittanceStatus, collapsed, onToggle }: {
-  remittance: RowDetail["remittance"];
-  allInvoiceNumbers: string[];
-  remittanceStatus: string | null | undefined;
-  collapsed: boolean;
-  onToggle: () => void;
-}) {
-  const [tab, setTab] = useState<"parsed" | "raw">("parsed");
-  const [downloading, setDownloading] = useState(false);
-  const hasRemittance = !!remittance;
-
-  const handleDownloadOriginal = async () => {
-    if (!remittance?.download_url || downloading) return;
-    setDownloading(true);
-    try {
-      const res = await downloadStorageFile(remittance.download_url);
-      const blob = new Blob([res.data]);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = remittance.filename || "remittance-email";
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      // Best-effort — the panel doesn't have its own error banner, so this
-      // fails silently rather than crashing the row-detail page. Retriable
-      // by clicking again.
-    }
-    setDownloading(false);
-  };
-
-  return (
-    <div className={`flex flex-col h-full border-l border-gray-200 bg-white transition-all duration-200 flex-shrink-0 ${collapsed ? "w-11" : "w-[320px]"}`}>
-      {/* Toggle header */}
-      <button onClick={onToggle}
-        className="flex items-center justify-center gap-2 px-3 py-3.5 bg-[#222222] hover:bg-[#222222] transition-colors cursor-pointer flex-shrink-0 w-full">
-        {collapsed ? (
-          <Mail size={14} className={hasRemittance ? "text-emerald-400" : "text-white/40"} />
-        ) : (
-          <>
-            <Mail size={12} className={hasRemittance ? "text-emerald-400" : "text-white/40"} />
-            <span className="text-[9px] font-black text-white uppercase tracking-widest flex-1 text-left">Remittance</span>
-            {hasRemittance && <span className="bg-emerald-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full">Found</span>}
-            <ChevronLeft size={12} className="text-white/50" />
-          </>
-        )}
-      </button>
-
-      {!collapsed && (
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {!remittance ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10 gap-4">
-              <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
-                <Mail size={20} className="text-gray-300" />
-              </div>
-              <div>
-                <p className="text-[11px] font-black text-gray-400 uppercase tracking-wider mb-1">No Remittance Email</p>
-                <p className="text-[10px] text-gray-400 leading-relaxed">
-                  {remittanceStatus === "not_checked"
-                    ? "Remittance check skipped — no invoice was matched."
-                    : "No matching email found for this payment."}
-                </p>
-              </div>
-              {allInvoiceNumbers.length > 0 && (
-                <div className="bg-gray-50 border border-gray-200 rounded-xs px-3 py-2.5 text-left w-full">
-                  <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-2">Searched for</p>
-                  {allInvoiceNumbers.map(inv => <p key={inv} className="font-mono text-[10px] text-gray-600">{inv}</p>)}
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="flex-shrink-0 px-3 py-2 border-b border-gray-200 bg-gray-50 space-y-2">
-                <div className="flex gap-1 bg-white border border-gray-200 rounded-xs p-0.5">
-                  {(["parsed", "raw"] as const).map(t => (
-                    <button key={t} onClick={() => setTab(t)}
-                      className={`flex-1 py-1 text-[9px] font-black uppercase tracking-wider rounded-xs transition-all cursor-pointer ${tab === t ? "bg-[#222222] text-white" : "text-gray-500 hover:text-[#222222]"}`}>
-                      {t}
-                    </button>
-                  ))}
-                </div>
-                {remittance.download_url && (
-                  <button
-                    onClick={handleDownloadOriginal}
-                    disabled={downloading}
-                    className="w-full flex items-center justify-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-[#222222] hover:text-[#222222] border border-gray-200 hover:border-[#222222] rounded-xs py-1.5 transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    {downloading ? <Loader2 size={10} className="animate-spin" /> : <Download size={10} />}
-                    {downloading ? "Downloading…" : "Download Original Email"}
-                  </button>
-                )}
-              </div>
-              {tab === "parsed" ? (
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  <div className="bg-blue-50/60 border border-blue-100 rounded-xs px-3">
-                    <DataRow label="Subject"   value={remittance.subject} />
-                    <DataRow label="From"      value={remittance.sender || remittance.payer} />
-                    <DataRow label="Customer"  value={remittance.customer_name || remittance.payer} />
-                    <DataRow label="Date"      value={fmtDate(remittance.payment_date)} mono />
-                    <DataRow label="Reference" value={remittance.payment_reference} mono />
-                    <DataRow label="Amount"
-                      value={remittance.payment_amount != null ? `${fmt(remittance.payment_amount)} ${remittance.payment_currency || ""}` : null}
-                      mono />
-                  </div>
-                  {(remittance.invoices || []).length > 0 && (
-                    <div>
-                      <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-2">
-                        Invoices in email — {remittance.invoices!.length}
-                      </p>
-                      <div className="border border-gray-200 rounded-xs overflow-hidden">
-                        <table className="w-full text-[10px]">
-                          <thead>
-                            <tr className="bg-[#222222] text-white">
-                              <th className="px-2.5 py-2 text-left text-[9px] font-black uppercase tracking-wider">Invoice #</th>
-                              <th className="px-2.5 py-2 text-right text-[9px] font-black uppercase tracking-wider">Amount</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100">
-                            {remittance.invoices!.map((inv: any, i: number) => {
-                              const isThis = allInvoiceNumbers.includes(inv.invoice_number);
-                              return (
-                                <tr key={i} className={isThis ? "bg-blue-50" : "hover:bg-gray-50"}>
-                                  <td className="px-2.5 py-2 font-mono font-bold text-[#222222]">
-                                    {inv.invoice_number}
-                                    {isThis && <span className="ml-1 text-[8px] bg-blue-100 text-blue-700 font-black px-1 py-0.5 rounded-xs">this row</span>}
-                                  </td>
-                                  <td className="px-2.5 py-2 font-mono text-right text-emerald-700 font-bold">
-                                    {inv.amount_paid != null ? fmt(inv.amount_paid) : "—"}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex-1 overflow-y-auto p-4">
-                  <pre className="text-[9px] font-mono text-gray-600 leading-relaxed whitespace-pre-wrap break-words bg-gray-50 border border-gray-200 rounded-xs p-3">
-                    {remittance.raw_body || "No body content."}
-                  </pre>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Oracle payload table ──────────────────────────────────────────────────────
-
-function OraclePayloadTable({ payload, creditAmount }: { payload: Record<string, any>; creditAmount: number }) {
-  const refs = (payload.remittanceReferences || []) as any[];
-  const topFields = Object.entries(payload).filter(([k]) => k !== "remittanceReferences" && !k.startsWith("_"));
-  const auditFields = Object.entries(payload).filter(([k]) => k.startsWith("_"));
-  const sumRefs = refs.reduce((s, r) => s + Number(r.ReferenceAmount || 0), 0);
-  const sumOk = refs.length === 0 || Math.abs(sumRefs - creditAmount) < 0.02;
-
-  return (
-    <div className="space-y-5">
-      {/* Top-level fields grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-        {topFields.map(([k, v]) => (
-          <div key={k} className="bg-gray-50 border border-gray-200 rounded-xs px-3 py-2.5">
-            <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">{k}</div>
-            <div className="text-[11px] font-mono font-bold text-[#222222] break-all">{v == null ? "—" : String(v)}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* remittanceReferences table */}
-      {refs.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-2.5">
-            <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider">Invoice References</span>
-            <span className={`text-[9px] font-black px-2.5 py-1 rounded-full border ${sumOk ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-red-50 text-red-700 border-red-200"}`}>
-              Σ {fmt(sumRefs)} {sumOk ? "✓ balanced" : "✗ mismatch"}
-            </span>
-          </div>
-          <div className="border border-gray-200 rounded-xs overflow-hidden">
-            <table className="w-full text-[11px]">
-              <thead>
-                <tr className="bg-[#222222] text-white">
-                  <th className="px-3 py-2.5 text-left text-[9px] font-black uppercase tracking-wider">Invoice #</th>
-                  <th className="px-3 py-2.5 text-left text-[9px] font-black uppercase tracking-wider">Match By</th>
-                  <th className="px-3 py-2.5 text-right text-[9px] font-black uppercase tracking-wider">Reference Amount</th>
-                  <th className="px-3 py-2.5 text-right text-[9px] font-black uppercase tracking-wider">Share</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {refs.map((ref, i) => (
-                  <tr key={i} className="hover:bg-blue-50/30">
-                    <td className="px-3 py-2.5 font-mono font-bold text-[#222222]">{ref.ReferenceNumber}</td>
-                    <td className="px-3 py-2.5 text-gray-500">{ref.ReceiptMatchBy}</td>
-                    <td className="px-3 py-2.5 font-mono font-bold text-right text-[#222222]">{fmt(Number(ref.ReferenceAmount))}</td>
-                    <td className="px-3 py-2.5 font-mono text-right text-gray-400 text-[10px]">
-                      {creditAmount > 0 ? `${((Number(ref.ReferenceAmount) / creditAmount) * 100).toFixed(1)}%` : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="border-t-2 border-gray-200 bg-gray-50">
-                <tr>
-                  <td colSpan={2} className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase tracking-wider">Total</td>
-                  <td className={`px-3 py-2 font-mono font-black text-right ${sumOk ? "text-emerald-700" : "text-red-600"}`}>{fmt(sumRefs)}</td>
-                  <td className="px-3 py-2 font-mono text-right text-gray-400 text-[10px]">
-                    {creditAmount > 0 ? `${((sumRefs / creditAmount) * 100).toFixed(1)}%` : "—"}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Audit / FX fields collapsed */}
-      {auditFields.length > 0 && (
-        <details className="text-[10px]">
-          <summary className="cursor-pointer font-bold text-gray-400 uppercase tracking-wider select-none">FX / Audit detail</summary>
-          <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {auditFields.map(([k, v]) => (
-              <div key={k} className="bg-gray-50 border border-gray-200 rounded-xs px-3 py-2">
-                <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">{k}</div>
-                <div className="text-[10px] font-mono font-bold text-gray-600 break-all">
-                  {v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
-    </div>
-  );
-}
-
-// ── Raw JSON viewer (collapsible) ────────────────────────────────────────────
-// Used for the actual Oracle response bodies — receipt creation + invoice
-// mapping — which the older OraclePayloadTable above doesn't cover (that
-// table renders the OUTBOUND request payload; this renders what Oracle
-// actually sent BACK).
-
-function RawResponseViewer({ title, data }: { title: string; data: any }) {
-  const [open, setOpen] = useState(false);
-  // PATCH: this used to `return null` entirely when data was missing —
-  // which looked exactly like the section didn't exist at all, with zero
-  // indication anything was ever supposed to be here. Now always renders
-  // the header; only the expand behavior changes based on whether data
-  // is actually present.
-  const hasData = data != null;
-  return (
-    <div className="border border-gray-200 rounded-xs overflow-hidden">
-      <button
-        onClick={() => hasData && setOpen(v => !v)}
-        disabled={!hasData}
-        className={`w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 transition-colors ${hasData ? "hover:bg-gray-100 cursor-pointer" : "cursor-default"}`}
-      >
-        <span className="text-[9px] font-black text-gray-500 uppercase tracking-wider">{title}</span>
-        <span className={`text-[9px] font-bold ${hasData ? "text-gray-400" : "text-gray-300 italic"}`}>
-          {hasData ? (open ? "Hide" : "Show") : "Not recorded for this row"}
-        </span>
-      </button>
-      {!hasData && (
-        <p className="px-4 py-2.5 text-[9px] text-gray-400 leading-relaxed border-t border-gray-100">
-          This row's receipt/mapping ran before this response was being saved, or that step hasn't run yet.
-        </p>
-      )}
-      {open && (
-        <pre className="text-[9px] font-mono text-gray-600 leading-relaxed whitespace-pre-wrap break-words bg-white p-3 max-h-[320px] overflow-y-auto">
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      )}
-    </div>
-  );
-}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RowDetailPage() {
+  const { allowed, checking } = usePageGuard("canViewData");
   const params       = useParams();
   const router       = useRouter();
   const searchParams = useSearchParams();
@@ -748,6 +256,26 @@ export default function RowDetailPage() {
     setRecheckLoading(false);
   };
 
+  // Dispatches a code from `available_actions` (server-computed -- see
+  // hitl/actions_registry.py) to the actual handler. "map_invoice" isn't a
+  // one-click API call -- it just scrolls to/reveals the Manual Invoice
+  // Mapping card below, which already has its own picker UI.
+  const [busyActionCode, setBusyActionCode] = useState<string | null>(null);
+  const handleAction = async (code: string) => {
+    setBusyActionCode(code);
+    try {
+      if (code === "approve") await handleApprove();
+      else if (code === "reject") await handleReject();
+      else if (code === "retry_oracle") await handleRetry();
+      else if (code === "recheck_remittance") await handleRecheckRemittance();
+      else if (code === "map_invoice") {
+        document.getElementById("manual-mapping-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } finally {
+      setBusyActionCode(null);
+    }
+  };
+
   // ── Loading / not-found ─────────────────────────────────────────────────────
 
   if (loading) return (
@@ -793,28 +321,6 @@ export default function RowDetailPage() {
     || (!detail.category && (
         ex.row_type === "EXACT_MATCH" || ex.row_type === "ACCEPTABLE_SHORT_PAYMENT"
       ));
-
-  const canApprove = ex.is_matched
-    && isReadyForOracle
-    && oracle.hitl_status !== "approved"
-    && oracle.hitl_status !== "rejected"
-    && oracle.post_status !== "success";
-
-  // Reject: any non-terminal identified row
-  const canReject = ex.is_matched
-    && oracle.hitl_status !== "rejected"
-    && oracle.post_status !== "success";
-
-  // Retry: row was approved and Oracle POST failed (e.g. network/DNS/config
-  // issue) — re-attempts the exact same payload via retry_oracle_post(),
-  // which server-side only proceeds if oracle_post_status is still "failed".
-  const canRetry = isPostFailed;
-
-  // Recheck Remittance: only meaningful for a row still actually waiting
-  // on one (category === "needs_remittance") — the backend itself only
-  // ever acts on rule_id === "R7" rows regardless of what this shows, but
-  // hiding it otherwise avoids a button that would just always no-op.
-  const canRecheckRemittance = detail.category === "needs_remittance";
 
   const reasonConfig = getReasonConfig(ex.row_type || oracle.remittance_scenario);
 
@@ -883,6 +389,9 @@ export default function RowDetailPage() {
     || status === "processed"
     || status === "post_failed";
 
+  if (checking) return null;
+  if (!allowed) return <PageAccessDenied />;
+
   return (
     <div className="min-h-screen bg-[#F8F9FB] flex flex-col">
 
@@ -913,34 +422,15 @@ export default function RowDetailPage() {
           <span className="text-[10px] font-bold text-white/40 font-mono">ID {recordId}</span>
         </div>
 
-        {/* Action buttons — only applicable ones render */}
+        {/* Action buttons — server-computed from row state + the signed-in
+            user's permissions (see hitl/actions_registry.py). No client-side
+            eligibility logic needed here anymore. */}
         <div className="flex items-center gap-2 pl-4 border-l border-white/10">
-          {canApprove && (
-            <button disabled={actionLoading} onClick={handleApprove}
-              className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 text-white px-4 py-2 text-[10px] font-black uppercase tracking-wider cursor-pointer disabled:opacity-50 transition-colors">
-              <Check size={12} className="stroke-[3]" /> Approve &amp; Post
-            </button>
-          )}
-          {canRetry && (
-            <button disabled={actionLoading} onClick={handleRetry}
-              className="flex items-center gap-1.5 bg-blue-500 hover:bg-blue-400 text-white px-4 py-2 text-[10px] font-black uppercase tracking-wider cursor-pointer disabled:opacity-50 transition-colors">
-              <RefreshCw size={12} className={`stroke-[3] ${actionLoading ? "animate-spin" : ""}`} /> Retry Post
-            </button>
-          )}
-          {canRecheckRemittance && (
-            <button disabled={recheckLoading} onClick={handleRecheckRemittance}
-              title="Check whether a remittance has arrived since this row landed here"
-              className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-white px-4 py-2 text-[10px] font-black uppercase tracking-wider cursor-pointer disabled:opacity-50 transition-colors">
-              <Mail size={12} className={`stroke-[3] ${recheckLoading ? "animate-pulse" : ""}`} />
-              {recheckLoading ? "Checking…" : "Recheck Remittance"}
-            </button>
-          )}
-          {canReject && (
-            <button disabled={actionLoading} onClick={handleReject}
-              className="flex items-center gap-1.5 bg-red-500 hover:bg-red-400 text-white px-4 py-2 text-[10px] font-black uppercase tracking-wider cursor-pointer disabled:opacity-50 transition-colors">
-              <X size={12} className="stroke-[3]" /> Reject
-            </button>
-          )}
+          <ActionBar
+            actions={detail.available_actions || []}
+            onAction={handleAction}
+            busyCode={actionLoading || recheckLoading ? busyActionCode : null}
+          />
         </div>
       </div>
 
@@ -1150,6 +640,7 @@ export default function RowDetailPage() {
                 never typed by the SPOC.
             ══════════════════════════════════════════════ */}
             {canManuallyMap && (
+              <div id="manual-mapping-card">
               <CardShell>
                 <CardHead
                   icon={<Hash size={13} />}
@@ -1345,6 +836,7 @@ export default function RowDetailPage() {
                   ) : null}
                 </div>
               </CardShell>
+              </div>
             )}
 
             {/* ══════════════════════════════════════════════
@@ -1430,25 +922,36 @@ export default function RowDetailPage() {
                 {/* Cross-OU comparison — which entity received the payment vs which
                     entity the customer's invoice(s) actually belong to. */}
                 {isCrossOU && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-gray-50 border border-gray-200 rounded-xs px-4 py-3">
-                      <div className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-1.5">Received Into (Bank's OU)</div>
-                      <div className="font-black text-[#222222] text-[14px] leading-snug">
-                        {bs.ou_display_name || bs.business_unit || "—"}
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-gray-50 border border-gray-200 rounded-xs px-4 py-3">
+                        <div className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-1.5">Received Into (Bank's OU)</div>
+                        <div className="font-black text-[#222222] text-[14px] leading-snug">
+                          {bs.ou_display_name || bs.business_unit || "—"}
+                        </div>
+                        {bs.ou_number && <div className="text-[10px] text-gray-400 font-mono font-bold mt-1">OU {bs.ou_number}</div>}
                       </div>
-                      {bs.ou_number && <div className="text-[10px] text-gray-400 font-mono font-bold mt-1">OU {bs.ou_number}</div>}
-                    </div>
-                    <div className="bg-gray-50 border border-gray-200 rounded-xs px-4 py-3">
-                      <div className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-1.5">Customer's OU (Invoice)</div>
-                      <div className="font-black text-[#222222] text-[14px] leading-snug">
-                        {confirmed_invoices[0]?.ou_display_name || confirmed_invoices[0]?.ou_number || "—"}
+                      <div className="bg-gray-50 border border-gray-200 rounded-xs px-4 py-3">
+                        <div className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-1.5">Customer's OU (Invoice)</div>
+                        <div className="font-black text-[#222222] text-[14px] leading-snug">
+                          {confirmed_invoices[0]?.ou_display_name || confirmed_invoices[0]?.ou_number || "—"}
+                        </div>
+                        {confirmed_invoices[0]?.ou_number && <div className="text-[10px] text-gray-400 font-mono font-bold mt-1">OU {confirmed_invoices[0].ou_number}</div>}
                       </div>
-                      {confirmed_invoices[0]?.ou_number && <div className="text-[10px] text-gray-400 font-mono font-bold mt-1">OU {confirmed_invoices[0].ou_number}</div>}
+                      <div className="col-span-2 flex items-center gap-2 px-4 py-2.5 rounded-xs border bg-red-50 border-red-200">
+                        <GitBranch size={13} className="text-red-500 shrink-0" />
+                        <span className="text-[10px] font-black text-red-700 uppercase tracking-wider">Entity mismatch — must be re-routed before posting</span>
+                      </div>
                     </div>
-                    <div className="col-span-2 flex items-center gap-2 px-4 py-2.5 rounded-xs border bg-red-50 border-red-200">
-                      <GitBranch size={13} className="text-red-500 shrink-0" />
-                      <span className="text-[10px] font-black text-red-700 uppercase tracking-wider">Entity mismatch — must be re-routed before posting</span>
-                    </div>
+
+                    {/* Supporting evidence — every OU actually checked, not
+                        just the one that mattered for the verdict above. */}
+                    {detail.ou_evidence && (
+                      <CrossOUEvidencePanel
+                        evidence={detail.ou_evidence}
+                        extractedCustomerName={ex.extracted_customer}
+                      />
+                    )}
                   </div>
                 )}
 

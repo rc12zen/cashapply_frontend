@@ -118,7 +118,11 @@ function fmtDate(s: string | null) {
 
 const PAGE_SIZE = 50;
 
+import { usePageGuard } from "@/lib/usePageGuard";
+import PageAccessDenied from "@/components/PageAccessDenied";
+
 export default function ExecutiveSummaryPage() {
+  const { allowed, checking } = usePageGuard("canViewData");
   const [bankOptions, setBankOptions] = useState<string[]>([]);
   const [buOptions, setBuOptions] = useState<string[]>([]);
   const [pillDefs, setPillDefs] = useState<PillDef[]>([]);
@@ -310,6 +314,9 @@ export default function ExecutiveSummaryPage() {
     timePeriod !== "All Time" || !!activePill || !!activeNonPostedPill;
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  if (checking) return null;
+  if (!allowed) return <PageAccessDenied />;
 
   return (
     <div className="space-y-6">
