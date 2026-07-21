@@ -13,6 +13,12 @@ interface GroupAmounts {
   processed: number;
   rejected: number;
   post_failed: number;
+  // Index signature -- MetricToggleBar's `values` prop expects
+  // Record<string, number>, which requires a promise that ANY string key
+  // resolves to a number, not just these seven named ones. The named
+  // fields above still get full autocomplete/type-checking everywhere in
+  // THIS file; this only widens what the type is ALSO assignable to.
+  [key: string]: number;
 }
 
 interface AmountViewCardProps {
