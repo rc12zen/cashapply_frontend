@@ -41,6 +41,7 @@ import RunControlBar from "./components/RunControlBar";
 import {
   type ConfigCandidate, type FileInfo, type AccountGroup, isAccountRunnable,
 } from "./types";
+import { formatGreetingName } from "@/lib/formatName";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -254,7 +255,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     const match = document.cookie.match(/(?:^|; )login_user_email_stub=([^;]*)/);
-    if (match?.[1]) setUserDisplayName(decodeURIComponent(match[1]).split("@")[0]);
+    if (match?.[1]) setUserDisplayName(formatGreetingName(decodeURIComponent(match[1]).split("@")[0]));
 
     (async () => {
       // Resolve the role FIRST -- a Viewer holds no permissions at all, so
@@ -264,6 +265,12 @@ export default function Dashboard() {
       let viewer = false;
       try {
         const me = await getMe();
+        // Prefer the authoritative display_name from /auth/me over the
+        // email-cookie fallback set above. Guarded so a missing/blank/
+        // non-string value never blanks out the greeting -- it just keeps
+        // whatever the cookie/default already produced.
+        const dn = me.data?.display_name;
+        if (typeof dn === "string" && dn.trim()) setUserDisplayName(formatGreetingName(dn.trim()));
         viewer = isViewerRoles(me.data?.roles ?? null);
       } catch {
         // 401 handled globally by lib/api.ts's interceptor; treat unknown
