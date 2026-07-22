@@ -1,27 +1,14 @@
 "use client";
-/**
- * components/MsalClientProvider.tsx
- * ====================================
- * Wraps the app in MSAL React's <MsalProvider> — only when real Azure AD
- * SSO is in play (APP_ENV !== "local"). In local dev this renders its
- * children directly with no MSAL instance at all, so the existing
- * X-Dev-User cookie flow (app/page.tsx, lib/api.ts) keeps working exactly
- * as before — nothing MSAL-related is even constructed in that mode.
- *
- * Also handles the redirect-flow plumbing MsalProvider needs
- * (handleRedirectPromise is called once, automatically, by MSAL React
- * itself on mount — this component only needs to construct+initialize
- * the PublicClientApplication instance and hand it to the provider).
- */
 import { PublicClientApplication, EventType, type AuthenticationResult } from "@azure/msal-browser";
 import { MsalProvider } from "@azure/msal-react";
 import { useEffect, useMemo, useState } from "react";
 import { IS_LOCAL_DEV, isAzureConfigured, msalConfig } from "@/lib/msalConfig";
 
 export default function MsalClientProvider({ children }: { children: React.ReactNode }) {
-  const [ready, setReady] = useState(IS_LOCAL_DEV); // local dev never waits on MSAL
+  const [ready, setReady] = useState(IS_LOCAL_DEV);
 
   const msalInstance = useMemo(() => {
+    if (typeof window === "undefined") return null; // never construct during SSR
     if (IS_LOCAL_DEV) return null;
     if (!isAzureConfigured()) {
       // eslint-disable-next-line no-console
@@ -38,11 +25,6 @@ export default function MsalClientProvider({ children }: { children: React.React
     if (IS_LOCAL_DEV || !msalInstance) return;
     let mounted = true;
     msalInstance.initialize().then(() => {
-      // Pick an active account automatically after a redirect completes,
-      // or if one is already cached from a previous session — every
-      // acquireTokenSilent() call downstream (lib/api.ts) needs an active
-      // account set, MSAL doesn't infer it on its own with multiple
-      // accounts possible in the cache.
       const accounts = msalInstance.getAllAccounts();
       if (accounts.length > 0 && !msalInstance.getActiveAccount()) {
         msalInstance.setActiveAccount(accounts[0]);
@@ -64,10 +46,12 @@ export default function MsalClientProvider({ children }: { children: React.React
 
   if (IS_LOCAL_DEV) return <>{children}</>;
 
+  // Still on the server (or first paint before hydration) — render nothing
+  // rather than a misleading error screen; the real check happens once
+  // we're actually in the browser.
+  if (typeof window === "undefined") return null;
+
   if (!msalInstance) {
-    // Azure isn't configured at all — surface this clearly instead of a
-    // silent blank screen, since every API call will otherwise 401 with
-    // no obvious cause.
     return (
       <div className="min-h-screen flex items-center justify-center bg-white px-6">
         <div className="max-w-sm text-center">
@@ -82,7 +66,7 @@ export default function MsalClientProvider({ children }: { children: React.React
     );
   }
 
-  if (!ready) return null; // brief — avoids rendering pre-MSAL-init
+  if (!ready) return null;
 
   return <MsalProvider instance={msalInstance}>{children}</MsalProvider>;
 }
