@@ -5,8 +5,12 @@ import { getAccessToken } from "./msalToken";
 // Points at the backend API. NEXT_PUBLIC_API_BASE_URL must be set for
 // UAT/prod (there's no sensible default other than localhost, which only
 // makes sense for local dev) -- see .env.uat.
+// export const API = axios.create({
+//   baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000",
+// });
+
 export const API = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000",
+  baseURL: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000",
 });
 
 // ── Auth ──────────────────────────────────────────────────────────────────
