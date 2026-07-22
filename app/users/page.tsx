@@ -5,21 +5,26 @@
  * User Management. Broken into focused pieces (each responsible for one
  * thing) rather than one large file:
  *   - components/users/UsersTable.tsx       — the list/table + pagination
- *   - components/users/OnboardUserModal.tsx — the "onboard new user" form
  *   - components/users/RoleMultiSelect.tsx  — shared multi-role picker
  *     (an Administrator can assign a user ANY NUMBER of roles at once —
  *     see backend scripts/seed_rbac.py / db/models.py's UserRole table)
  * This file just orchestrates: fetching, search/pagination state, and the
- * onboard/role-change/activate handlers.
+ * role-change/activate handlers.
+ *
+ * CHANGE: removed the "Onboard User" invite flow (OnboardUserModal /
+ * onboardUser) — auth/jit_provision.py now auto-creates a user row (on
+ * Viewer, zero permissions) the moment they successfully sign in via
+ * Azure AD, so there's no longer a need to pre-invite someone by email
+ * before their first login. This page is now purely: search the users
+ * who've already shown up, change their role(s), activate/deactivate.
  */
-import { Loader2, Plus, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { Loader2, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getMe, getRoles, getUsers, onboardUser, setUserActive, updateUser } from "@/lib/api";
+import { getMe, getRoles, getUsers, setUserActive, updateUser } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
 import RoleLegend from "@/components/RoleLegend";
 import UsersTable, { type UserRow } from "@/components/users/UsersTable";
-import OnboardUserModal from "@/components/users/OnboardUserModal";
 import { type RoleOption } from "@/components/users/RoleMultiSelect";
 
 function getCookie(name: string): string | null {
@@ -45,11 +50,6 @@ export default function UsersPage() {
 	const [search, setSearch] = useState("");
 	const [page, setPage] = useState(1);
 	const [busyId, setBusyId] = useState<number | null>(null);
-
-	// Onboard modal
-	const [modalOpen, setModalOpen] = useState(false);
-	const [modalError, setModalError] = useState("");
-	const [saving, setSaving] = useState(false);
 
 	// ── Route guard: admin-only. Backend also enforces "user:manage". ───────────
 	useEffect(() => {
@@ -107,25 +107,6 @@ export default function UsersPage() {
 	const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
 	// ── Actions ───────────────────────────────────────────────────────────────
-	const handleOnboard = async (data: { email: string; display_name?: string; role_names: string[] }) => {
-		setSaving(true);
-		setModalError("");
-		try {
-			await onboardUser({
-				email: data.email,
-				display_name: data.display_name,
-				role_names: data.role_names,
-			});
-			showSuccess(`Onboarded ${data.email} as ${data.role_names.join(", ")}. They can sign in with this email.`);
-			setModalOpen(false);
-			fetchAll();
-		} catch (err: any) {
-			setModalError(getErrorMessage(err, "Could not onboard user."));
-		} finally {
-			setSaving(false);
-		}
-	};
-
 	const handleRolesChange = async (u: UserRow, roleNames: string[]) => {
 		const current = u.roles ?? (u.role ? [u.role] : []);
 		if (JSON.stringify([...current].sort()) === JSON.stringify([...roleNames].sort())) return;
@@ -170,7 +151,7 @@ export default function UsersPage() {
 				<div>
 					<h1 className="text-xl font-black text-primary uppercase tracking-wider">Users</h1>
 					<p className="text-xs text-gray-500 mt-0.5 font-medium">
-						Onboard users by email, assign one or more roles, and manage access
+						Users are added automatically on their first sign-in — assign roles and manage access here
 					</p>
 				</div>
 			</div>
@@ -201,12 +182,6 @@ export default function UsersPage() {
 							title="Reload users"
 						>
 							<RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-						</button>
-						<button
-							onClick={() => { setModalOpen(true); setModalError(""); }}
-							className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider bg-[#222222] hover:bg-[#222222] text-white px-3 py-1.5 rounded-sm cursor-pointer shadow-xs transition-colors"
-						>
-							<Plus size={12} /> Onboard User
 						</button>
 					</div>
 				</div>
@@ -240,7 +215,7 @@ export default function UsersPage() {
 					</div>
 				) : users.length === 0 ? (
 					<div className="px-4 py-6 text-xs text-gray-400 text-center">
-						No users yet. Onboard one to grant access.
+						No users yet. They&apos;ll appear here after their first sign-in.
 					</div>
 				) : filtered.length === 0 ? (
 					<div className="px-4 py-6 text-xs text-gray-400 text-center">No users match &ldquo;{search}&rdquo;.</div>
@@ -295,16 +270,6 @@ export default function UsersPage() {
 			<div className="mt-6">
 				<RoleLegend />
 			</div>
-
-			{modalOpen && (
-				<OnboardUserModal
-					roles={roles}
-					saving={saving}
-					error={modalError}
-					onCancel={() => setModalOpen(false)}
-					onSubmit={handleOnboard}
-				/>
-			)}
 		</div>
 	);
 }
