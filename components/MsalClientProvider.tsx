@@ -37,7 +37,38 @@ export default function MsalClientProvider({ children }: { children: React.React
           msalInstance.setActiveAccount((event.payload as AuthenticationResult).account);
         }
       });
-      if (mounted) setReady(true);
+
+      // FIX: MsalProvider (below) calls instance.handleRedirectPromise() on
+      // its own mount with NO options, and navigateToLoginRequestUrl isn't
+      // settable via msalConfig.auth in msal-browser v5 — it's a per-call
+      // option on handleRedirectPromise itself, defaulting to true. Left
+      // alone, that default fires MSAL's own client-side navigation back to
+      // whatever page loginRedirect() was originally called from (e.g. "/"),
+      // racing against — and beating — our own app/auth/callback page's
+      // router.replace("/home" | "/welcome") once getMe() resolves.
+      //
+      // handleRedirectPromise() memoizes its result per call (keyed on
+      // options.hash, "" here since we don't pass one) and returns that same
+      // cached settled promise to every subsequent caller using the same
+      // key — so calling it here FIRST, with navigation disabled, means
+      // MsalProvider's later no-args call just receives the already-settled
+      // promise instead of re-running (and re-navigating). This must
+      // resolve before setReady(true) below, so MsalProvider never gets a
+      // chance to be the first caller.
+      msalInstance
+        .handleRedirectPromise({ navigateToLoginRequestUrl: false })
+        .then((result) => {
+          if (result?.account) {
+            msalInstance.setActiveAccount(result.account);
+          }
+        })
+        .catch(() => {
+          // Errors are surfaced via the LOGIN_FAILURE event / the callback
+          // page's own error handling — nothing extra to do here.
+        })
+        .finally(() => {
+          if (mounted) setReady(true);
+        });
     });
     return () => {
       mounted = false;
