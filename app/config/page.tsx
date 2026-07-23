@@ -26,10 +26,15 @@ function fmtTimestamp(iso?: string): string {
 }
 
 import { usePageGuard } from "@/lib/usePageGuard";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 import PageAccessDenied from "@/components/PageAccessDenied";
 
 export default function ConfigPage() {
-	const { allowed, checking } = usePageGuard("canViewData");
+	const { allowed, checking } = usePageGuard("config:view");
+	// config:author gates all authoring here (add/edit recipes via the
+	// wizard). Auditor holds config:view (can read this page) but NOT
+	// config:author, so the authoring controls are hidden for them.
+	const { flags } = useCurrentUser();
 	// ── Bank Statement Configs ───────────────────────────────────────────────
 	const [bankConfigs, setBankConfigs]       = useState<BankConfigEntry[]>([]);
 	const [configsLoading, setConfigsLoading] = useState(false);
@@ -324,14 +329,16 @@ export default function ConfigPage() {
 							className="hidden"
 							onChange={handleFileChosen}
 						/>
-						<button
-							onClick={() => fileInputRef.current?.click()}
-							disabled={uploading}
-							className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider bg-[#222222] hover:bg-[#222222] text-white px-3 py-1.5 rounded-sm cursor-pointer shadow-xs transition-colors disabled:opacity-50"
-						>
-							{uploading ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-							{uploading ? "Uploading…" : "Add New Config"}
-						</button>
+						{flags.canAuthorConfig && (
+							<button
+								onClick={() => fileInputRef.current?.click()}
+								disabled={uploading}
+								className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider bg-[#222222] hover:bg-[#222222] text-white px-3 py-1.5 rounded-sm cursor-pointer shadow-xs transition-colors disabled:opacity-50"
+							>
+								{uploading ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+								{uploading ? "Uploading…" : "Add New Config"}
+							</button>
+						)}
 					</div>
 				</div>
 

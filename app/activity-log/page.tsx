@@ -85,7 +85,7 @@ import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
 
 export default function ActivityLogPage() {
-	const { allowed, checking } = usePageGuard("canViewActivityLog");
+	const { allowed, checking } = usePageGuard("activity_log:view");
 	const [activePill, setActivePill] = useState<(typeof PILLS)[number]["key"]>("analysis_run");
 	const [dateFrom, setDateFrom] = useState("");
 	const [dateTo, setDateTo] = useState("");

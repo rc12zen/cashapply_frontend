@@ -63,7 +63,7 @@ const navItems: {
 		section: "Settings",
 		requiresPermission: "canViewActivityLog",
 	},
-	{ href: "/config", label: "Config", icon: Settings, section: "Settings", requiresPermission: "canViewData" },
+	{ href: "/config", label: "Config", icon: Settings, section: "Settings", requiresPermission: "canViewConfig" },
 	{ href: "/bank-accounts", label: "Bank Accounts", icon: Landmark, section: "Settings", requiresPermission: "canViewData" },
 	// Admin-only — gated below by the current user's permissions from /me.
 	{ href: "/users", label: "Users", icon: Users, section: "Settings", requiresAdmin: true },

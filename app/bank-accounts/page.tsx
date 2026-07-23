@@ -24,7 +24,7 @@ import EditBusinessUnitsModal from "@/components/bank-accounts/EditBusinessUnits
 import type { BusinessUnitOption } from "@/components/bank-accounts/BusinessUnitPicker";
 
 export default function BankAccountsPage() {
-  const { allowed, checking } = usePageGuard("canViewData");
+  const { allowed, checking } = usePageGuard("run:view");
   const { flags } = useCurrentUser();
 
   const [accounts, setAccounts] = useState<BankAccountRow[]>([]);
@@ -132,7 +132,7 @@ export default function BankAccountsPage() {
         ) : (
           <BankAccountsTable
             accounts={accounts}
-            canEdit={flags.canManageConfig}
+            canEdit={flags.canAuthorConfig}
             onEdit={(a) => { setEditingAccount(a); setModalError(""); }}
           />
         )}

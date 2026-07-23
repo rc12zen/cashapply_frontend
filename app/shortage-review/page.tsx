@@ -251,7 +251,7 @@ export default function ShortageReviewPage() {
 }
 
 function ShortageReviewPageInner() {
-  const { allowed, checking } = usePageGuard("canViewData");
+  const { allowed, checking } = usePageGuard("run:view");
   const router       = useRouter();
   const searchParams = useSearchParams();
   const runId        = searchParams.get("run_id") ? Number(searchParams.get("run_id")) : undefined;

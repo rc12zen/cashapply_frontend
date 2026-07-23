@@ -72,13 +72,21 @@ export function isAdministrator(permissions: string[] | undefined | null): boole
 export function derivePermissionFlags(permissions: string[] | undefined | null) {
   return {
     canViewData: hasPermission(permissions, "run:view"),
+    canMonitorRuns: hasPermission(permissions, "run:monitor"),
     canRunAnalysis: hasPermission(permissions, "run:start"),
     canUploadStatement: hasPermission(permissions, "statement:upload"),
+    canViewConfig: hasPermission(permissions, "config:view"),
+    canAuthorConfig: hasPermission(permissions, "config:author"),
     canMapInvoices: hasPermission(permissions, "hitl:map"),
     canReject: hasPermission(permissions, "hitl:reject"),
     canApprove: hasPermission(permissions, "oracle:post"),
+    canDownloadFiles: hasPermission(permissions, "file:download"),
     canViewActivityLog: hasPermission(permissions, "activity_log:view"),
     canManageUsers: hasPermission(permissions, "user:manage"),
+    // config:manage is now Admin-only: aging upload/select/refresh/remove
+    // and deleting a bank-format recipe. General config authoring (save
+    // recipe, edit abbreviations, edit BU mapping, Config Builder) is
+    // canAuthorConfig.
     canManageConfig: hasPermission(permissions, "config:manage"),
     isAdmin: isAdministrator(permissions),
   };
