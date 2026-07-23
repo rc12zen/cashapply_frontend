@@ -24,6 +24,7 @@ import { IS_LOCAL_DEV } from "@/lib/msalConfig";
 import { signOutRedirect } from "@/lib/msalToken";
 import MsalClientProvider from "@/components/MsalClientProvider";
 import { derivePermissionFlags, isViewerRoles, isViewerAllowedPath, type PermissionFlags, type Role } from "@/lib/permissions";
+import { formatGreetingName } from "@/lib/formatName";
 
 const navItems: {
 	href: string;
@@ -118,7 +119,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 			const activeEmail = getCookie("login_user_email_stub");
 			if (activeEmail) {
 				setUserEmail(activeEmail);
-				setUserIdentifier(activeEmail.split("@")[0]);
+				setUserIdentifier(formatGreetingName(activeEmail.split("@")[0]));
 			}
 		}
 
@@ -129,7 +130,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 				setPermissions(res.data?.permissions ?? []);
 				if (!IS_LOCAL_DEV && res.data?.email) {
 					setUserEmail(res.data.email);
-					setUserIdentifier((res.data.display_name || res.data.email).split("@")[0]);
+					setUserIdentifier(formatGreetingName((res.data.display_name || res.data.email).split("@")[0]));
 				}
 			})
 			.catch(() => { setUserRole(null); setUserRoles([]); setPermissions([]); }); // 401 handled globally by lib/api.ts's interceptor
