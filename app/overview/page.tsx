@@ -124,8 +124,15 @@ export default function OverviewPage() {
   }));
   const totalCount = countData.reduce((sum, d) => sum + d.value, 0);
   const totalValue = valueData.reduce((sum, d) => sum + d.value, 0);
-  const fmtUsd = (v: number) =>
-    v >= 1000 ? `$${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}K` : `$${v.toLocaleString()}`;
+  const fmtUsd = (v: number) => {
+    if (v === null || v === undefined || isNaN(v)) return "$0";
+    const abs = Math.abs(v);
+    const sign = v < 0 ? "-" : "";
+    if (abs >= 1_000_000_000) return `${sign}$${(abs / 1_000_000_000).toFixed(2)}B`;
+    if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(abs >= 10_000 ? 0 : 1)}K`;
+    return `${sign}$${abs.toLocaleString()}`;
+  };
 
   if (checking) return null;
   if (!allowed) return <PageAccessDenied />;

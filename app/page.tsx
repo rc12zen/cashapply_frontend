@@ -187,7 +187,7 @@ function DevBypassLoginForm() {
 
 			<div className="pt-6 mt-6 border-t border-gray-100 text-center">
 				<p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
-					&copy; Zensar Technologies &bull; For Internal Use Only &bull; PoC v1.0
+					&copy; Zensar Technologies &bull; For Internal Use Only &bull; v1.0
 				</p>
 			</div>
 		</div>

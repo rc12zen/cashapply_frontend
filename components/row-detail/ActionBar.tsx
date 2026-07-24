@@ -83,7 +83,11 @@ export default function ActionBar({
               <button
                 onClick={() => { setConfirming(null); onAction(action.code); }}
                 className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-xs cursor-pointer text-white ${
-                  action.is_danger ? "bg-red-600 hover:bg-red-700" : "bg-[#222222] hover:bg-black"
+                  action.is_danger
+                    ? "bg-red-600 hover:bg-red-700"
+                    : action.code === "approve"
+                    ? "bg-emerald-600 hover:bg-emerald-700"
+                    : "bg-[#222222] hover:bg-black"
                 }`}
               >
                 Yes, {action.label}
@@ -106,6 +110,8 @@ export default function ActionBar({
             className={`flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider px-3 py-2 rounded-sm cursor-pointer shadow-xs transition-colors disabled:opacity-50 ${
               action.is_danger
                 ? "bg-white border border-red-300 text-red-600 hover:bg-red-50"
+                : action.code === "approve"
+                ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                 : "bg-[#222222] hover:bg-black text-white"
             }`}
           >
