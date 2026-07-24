@@ -16,6 +16,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type React from "react";
 import { getActivityLog, getActivityUsers, purgeSystemLogs } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
@@ -44,9 +45,9 @@ interface ActivityLogEntry {
 const PILLS = [
 	{ key: "analysis_run", label: "Analysis Run" },
 	{ key: "config_creation", label: "Configure Creation" },
-	{ key: "manual_mapping", label: "Manual Invoice Mapping" },
 	{ key: "approved", label: "Accepted" },
 	{ key: "rejected", label: "Rejected" },
+	{ key: "role_modification", label: "Role Modification" },
 	{ key: null, label: "All Logs" },
 ] as const;
 
@@ -68,6 +69,9 @@ function describeAction(entry: ActivityLogEntry): { label: string; icon: React.R
 	if (a.startsWith("hitl.reject")) {
 		return { label: "Rejected", icon: <XCircle size={11} />, styles: "bg-rose-50 text-rose-700 border-rose-200" };
 	}
+	if (a.startsWith("user.")) {
+		return { label: "Role Modification", icon: <User size={11} />, styles: "bg-amber-50 text-amber-700 border-amber-200" };
+	}
 	return { label: "Other Activity", icon: <History size={11} />, styles: "bg-gray-50 text-gray-700 border-gray-200" };
 }
 
@@ -86,6 +90,7 @@ import PageAccessDenied from "@/components/PageAccessDenied";
 
 export default function ActivityLogPage() {
 	const { allowed, checking } = usePageGuard("activity_log:view");
+	const router = useRouter();
 	const [activePill, setActivePill] = useState<(typeof PILLS)[number]["key"]>("analysis_run");
 	const [dateFrom, setDateFrom] = useState("");
 	const [dateTo, setDateTo] = useState("");
@@ -373,6 +378,17 @@ export default function ActivityLogPage() {
 										<p className="text-[10px] font-mono text-gray-400">IP {log.ip_address}</p>
 									)}
 								</div>
+
+								{log.action?.startsWith("run.") && log.entity_id && (
+									<div className="flex items-center p-4 shrink-0">
+										<button
+											onClick={() => router.push(`/analysis-history?run_id=${log.entity_id}`)}
+											className="text-xs font-bold text-[#222222] border border-gray-300 rounded-sm px-3 py-1.5 hover:bg-gray-50 transition-colors whitespace-nowrap"
+										>
+											Check Run
+										</button>
+									</div>
+								)}
 							</div>
 						);
 					})
