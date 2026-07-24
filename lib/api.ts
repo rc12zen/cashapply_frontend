@@ -426,6 +426,12 @@ export const getAgingPreview = (maxRows: number = 200) =>
   API.get("/api/config/aging-preview", { params: { max_rows: maxRows } });
 
 /**
+ * Downloads the full original aging report file (not just the preview rows).
+ */
+export const downloadAgingReport = () =>
+  API.get("/api/config/aging-download", { responseType: "blob" });
+
+/**
  * Every aging report ever loaded (manual upload OR the watch-folder
  * watcher), most recent first — nothing is ever hard-deleted, so this is
  * a permanent history. Returns { items: [{ id, filename, uploaded_at,
