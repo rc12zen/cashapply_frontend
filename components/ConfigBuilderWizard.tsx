@@ -18,7 +18,8 @@ import {
   AlertCircle, AlertTriangle, Check, ChevronDown, ChevronLeft,
   ChevronRight, Eye, Info, Loader2, MousePointerClick, Play, Plus, Save, TableProperties, X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { getBuilderRawPreview, locateAccount, saveRecipe, testBuilderDraft, getAvailableOUs } from "@/lib/configBuilderApi";
 import { getErrorMessage } from "@/lib/errorMessage";
 import type {
@@ -28,19 +29,31 @@ import type {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const LOGICAL_FIELDS: { name: LogicalField; label: string; required: boolean }[] = [
+const LOGICAL_FIELDS: { name: LogicalField; label: string; required: boolean; noneAllowed?: boolean }[] = [
   { name: "date",           label: "Date",           required: true },
   { name: "narrative",      label: "Narrative",      required: true },
   { name: "credit_amount",  label: "Credit Amount",  required: true },
   { name: "account_number", label: "Account Number", required: true },
   { name: "currency",       label: "Currency",       required: true },
   { name: "bank_name",      label: "Bank Name",      required: true },
-  // Optional: the bank's own transaction reference is nullable downstream and
-  // many statements don't carry it — the "Not in this file" (none) option must
-  // be a valid choice, so this can't be required (a required field can never be
-  // satisfied by "none", which would wedge the Next button — see canProceed).
-  { name: "bank_reference", label: "Bank Reference", required: false },
+  // Required, but the bank's own transaction reference genuinely may not exist in
+  // the statement. `noneAllowed` lets "Not in this file" (none) satisfy the
+  // requirement — the field still starts unselected so the user consciously picks
+  // a column OR "Not in this file" (see fieldSatisfied + the initial mapping).
+  { name: "bank_reference", label: "Bank Reference", required: true, noneAllowed: true },
 ];
+
+// Whether a field's current source counts as a completed choice. "none" only
+// satisfies a field that explicitly allows it (bank_reference); for every other
+// field the user must point it at real data.
+function fieldSatisfied(field: { noneAllowed?: boolean }, src: FieldSource): boolean {
+  if (src.type === "column") return !!src.name;
+  if (src.type === "cell")   return true;
+  if (src.type === "fixed")  return !!src.value?.trim();
+  if (src.type === "concat") return (src.names?.length ?? 0) > 0;
+  if (src.type === "none")   return field.noneAllowed === true;
+  return false;
+}
 
 // Strong, general account-number matcher for the regex locator. Captures any
 // 6–34 char alphanumeric run that contains at least one digit — covers pure
@@ -58,7 +71,7 @@ const FIELD_HELP: Record<LogicalField, string> = {
   account_number: "Your company's bank account the money was paid into. Used to find the matching OU.",
   currency:       "The currency of the payment, e.g. USD or EUR.",
   bank_name:      "The name of the bank. If it isn't in the file, use 'Same value for every row' and type it in.",
-  bank_reference: "The bank's own transaction reference number for the payment.",
+  bank_reference: "The bank's own transaction reference number for the payment. If the statement doesn't carry one, choose 'Not in this file'.",
 };
 
 // NOTE: "Exclusions" is intentionally hidden from the wizard for now. The
@@ -115,7 +128,9 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
     account_number: { type: "cell",   row: 1, col: 1 },
     currency:       { type: "cell",   row: 2, col: 1 },
     bank_name:      { type: "fixed",  value: "" },
-    bank_reference: { type: "none" },
+    // Starts unselected (invalid) so the user must actively pick a column or
+    // choose "Not in this file"; auto-wiring only fills it if a ref column exists.
+    bank_reference: { type: "column", name: null },
   });
 
   // ── Step 4: Credit rule ───────────────────────────────────────────────────────
@@ -396,14 +411,8 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   // ── Internal test: structural checks that must hold before the user test ───────
   // (Q: "structure + account only" — we do NOT require credit rows > 0.)
   const internalChecks = useCallback((): { label: string; ok: boolean }[] => {
-    const requiredMapped = LOGICAL_FIELDS.filter((f) => f.required).every(({ name }) => {
-      const src = fieldMappings[name];
-      if (src.type === "column") return !!src.name;
-      if (src.type === "cell")   return true;
-      if (src.type === "fixed")  return !!src.value?.trim();
-      if (src.type === "concat") return (src.names?.length ?? 0) > 0;
-      return false;
-    });
+    const requiredMapped = LOGICAL_FIELDS.filter((f) => f.required).every((f) =>
+      fieldSatisfied(f, fieldMappings[f.name]));
     return [
       { label: "Header row selected",              ok: headerRow !== null },
       { label: "All required columns are mapped",  ok: requiredMapped },
@@ -426,15 +435,8 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const canProceed = (): boolean => {
     if (step === 2) return headerRow !== null;
     if (step === 3) {
-      const required = LOGICAL_FIELDS.filter((f) => f.required);
-      return required.every(({ name }) => {
-        const src = fieldMappings[name];
-        if (src.type === "column") return !!src.name;
-        if (src.type === "cell")   return true;
-        if (src.type === "fixed")  return !!src.value?.trim();
-        if (src.type === "concat") return (src.names?.length ?? 0) > 0;
-        return false;
-      });
+      return LOGICAL_FIELDS.filter((f) => f.required).every((f) =>
+        fieldSatisfied(f, fieldMappings[f.name]));
     }
     if (step === 4) return !!creditRule.field;
     if (step === 5) return !!accountNumber.trim();     // Account step
@@ -450,23 +452,62 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
     if (lastAutoWireRef.current === headerRow) return;
     lastAutoWireRef.current = headerRow ?? -1;
 
-    const colsLower = columns.map((c) => c.toLowerCase());
-    const findCol = (...candidates: string[]) =>
-      columns.find((_, i) => candidates.some((c) => colsLower[i].includes(c.toLowerCase()))) ?? null;
+    const colsLower = columns.map((c) => (c ?? "").toLowerCase());
+    // Tokenise on non-alphanumerics so short markers (cr, dr, ref) match as whole
+    // words, not as substrings hiding inside other words (e.g. "cr" in
+    // "description"). hasTok = whole-word match; hasSub = raw substring match.
+    const colTokens = colsLower.map((c) => c.replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean));
+    const hasTok = (i: number, t: string) => colTokens[i].includes(t);
+    const hasSub = (i: number, s: string) => colsLower[i].includes(s);
+    // Try predicates in priority order; return the first column matching one.
+    const pick = (...preds: ((i: number) => boolean)[]): string | null => {
+      for (const pred of preds) {
+        const i = columns.findIndex((_, idx) => pred(idx));
+        if (i >= 0) return columns[i];
+      }
+      return null;
+    };
+
+    const dateCol = pick(
+      (i) => hasSub(i, "value date") || hasSub(i, "posting date"),
+      (i) => hasTok(i, "date"),
+      (i) => hasSub(i, "date"),
+    );
+    const narrativeCol = pick(
+      (i) => hasSub(i, "narrative") || hasSub(i, "description"),
+      (i) => hasSub(i, "customer name") || hasSub(i, "remitter") || hasSub(i, "payer") || hasSub(i, "sender"),
+      (i) => hasSub(i, "remark") || hasSub(i, "concept") || hasSub(i, "particular") || hasSub(i, "detail") || hasSub(i, "purpose"),
+    );
+    // Credit amount: prefer an explicit credit column and NEVER a debit column;
+    // only fall back to a lone "amount" column when there's no separate Dr/Cr
+    // split (this is what previously mis-picked Amount_Dr via a bare "amount").
+    const creditCol = pick(
+      (i) => (hasTok(i, "cr") || hasTok(i, "credit")) && !hasTok(i, "dr") && !hasTok(i, "debit"),
+      (i) => (hasSub(i, "amount_cr") || hasSub(i, "credit amount") || hasSub(i, "cr amount")) && !hasSub(i, "debit"),
+      (i) => hasSub(i, "credit") && !hasSub(i, "debit"),
+      (i) => (hasTok(i, "amount") || hasSub(i, "amount")) && !hasTok(i, "dr") && !hasTok(i, "debit") && !hasSub(i, "balance"),
+    );
+    const refCol = pick(
+      (i) => hasSub(i, "bank ref") || hasSub(i, "transaction ref") || hasSub(i, "utr") || hasSub(i, "rrn"),
+      (i) => hasSub(i, "reference"),
+      (i) => hasTok(i, "ref"),
+    );
 
     setFieldMappings((prev) => ({
       ...prev,
-      date:          { type: "column", name: findCol("date", "value date", "posting") },
-      narrative:     { type: "column", name: findCol("narrative", "description", "customer name", "remark", "concept") },
-      credit_amount: { type: "column", name: findCol("credit", "amount_cr", "cr", "amount") },
-      bank_reference: { type: "column", name: findCol("reference", "ref", "bank ref") },
+      date:          { type: "column", name: dateCol },
+      narrative:     { type: "column", name: narrativeCol },
+      credit_amount: { type: "column", name: creditCol },
+      // Only auto-fill the reference when we actually spot one; otherwise leave it
+      // unselected so the user consciously picks a column or "Not in this file".
+      bank_reference: refCol ? { type: "column", name: refCol } : prev.bank_reference,
     }));
     // NOTE: the Credit Rule column is intentionally NOT pre-selected — the user
     // must consciously pick it on the Credit Rule step.
   }, [step, columns, headerRow]);
 
   // ── Render ────────────────────────────────────────────────────────────────────
-  return (
+  const modal = (
     <div className="fixed inset-0 z-50 flex flex-col bg-gray-900/60 backdrop-blur-sm">
       <div className="flex flex-col bg-white h-full max-h-screen overflow-hidden">
 
@@ -547,11 +588,11 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                 }} />
               )}
               {step === 4 && (
-                <StepCreditRule {...{ columns, creditRule, setCreditRule }} />
+                <StepCreditRule {...{ columns, creditRule, setCreditRule, activeRows, headerRow, subHeaderRow }} />
               )}
               {step === 5 && (
                 <StepLocateAccount {...{
-                  columns, activeRows, accountLocator, setAccountLocator,
+                  columns, activeRows, headerRow, accountLocator, setAccountLocator,
                   foundAccounts, existingFormats, accountNumber, setAccountNumber,
                   locating, locateError, handleLocate,
                   extension: previewData?.extension ?? "xlsx",
@@ -615,6 +656,11 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       </div>
     </div>
   );
+
+  // Portal to <body> so the modal's `fixed inset-0` is measured against the
+  // viewport, not the padded/transformed <main> content area (which otherwise
+  // leaves a gap at the top matching main's padding).
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -835,15 +881,382 @@ function StepHeader({
 // Step 3 — Column Mapping
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function StepColumns({
-  columns, fieldMappings, setFieldMappings, activeRows, headerRow,
-}: {
+interface ColumnMapperProps {
   columns: string[];
   fieldMappings: Record<LogicalField, FieldSource>;
   setFieldMappings: (m: Record<LogicalField, FieldSource>) => void;
   activeRows: string[][];
   headerRow: number | null;
-}) {
+}
+
+// Per-field colour + short label for the click-to-map grid. Full static class
+// strings (no interpolation) so Tailwind's JIT keeps them in the build.
+const FIELD_STYLE: Record<LogicalField, { badge: string; card: string; dot: string; ring: string }> = {
+  date:           { badge: "bg-blue-600 text-white",    card: "border-blue-400 bg-blue-50",     dot: "bg-blue-600",    ring: "ring-blue-400" },
+  narrative:      { badge: "bg-violet-600 text-white",  card: "border-violet-400 bg-violet-50", dot: "bg-violet-600",  ring: "ring-violet-400" },
+  credit_amount:  { badge: "bg-emerald-600 text-white", card: "border-emerald-400 bg-emerald-50", dot: "bg-emerald-600", ring: "ring-emerald-400" },
+  account_number: { badge: "bg-amber-600 text-white",   card: "border-amber-400 bg-amber-50",   dot: "bg-amber-600",   ring: "ring-amber-400" },
+  currency:       { badge: "bg-cyan-600 text-white",    card: "border-cyan-400 bg-cyan-50",     dot: "bg-cyan-600",    ring: "ring-cyan-400" },
+  bank_name:      { badge: "bg-rose-600 text-white",    card: "border-rose-400 bg-rose-50",     dot: "bg-rose-600",    ring: "ring-rose-400" },
+  bank_reference: { badge: "bg-slate-600 text-white",   card: "border-slate-400 bg-slate-50",   dot: "bg-slate-600",   ring: "ring-slate-400" },
+};
+
+const FIELD_SHORT: Record<LogicalField, string> = {
+  date: "Date", narrative: "Narrative", credit_amount: "Credit",
+  account_number: "Account", currency: "Currency", bank_name: "Bank", bank_reference: "Ref",
+};
+
+const MODE_CHIPS: { type: FieldSource["type"]; label: string }[] = [
+  { type: "column", label: "Column" },
+  { type: "cell",   label: "Cell" },
+  { type: "concat", label: "Combine" },
+  { type: "fixed",  label: "Fixed" },
+  { type: "none",   label: "Not in file" },
+];
+
+// ── Shared clickable preview grid (Steps 3/4/5) ────────────────────────────────
+// Generic, prop-driven: it owns rendering + click plumbing only, no field/rule
+// knowledge. The header row (index `headerRow`) renders the derived column names;
+// every other row shows raw cell text. Callers decide what is clickable, what is
+// highlighted, how rows are tinted, and what badges decorate each cell.
+interface PreviewGridProps {
+  columns: string[];            // derived header names, index-aligned to raw cols
+  activeRows: string[][];
+  headerRow: number;
+  interactive?: boolean;        // false → dim + disable all clicks
+  isCellClickable?: (ri: number, ci: number, isHeader: boolean) => boolean;
+  onCellClick?: (ri: number, ci: number, isHeader: boolean) => void;
+  rowTint?: (ri: number) => "credit" | "skip" | undefined;
+  cellHighlight?: (ri: number, ci: number, isHeader: boolean) => boolean;
+  cellDecoration?: (ri: number, ci: number, isHeader: boolean) => ReactNode;
+  maxHeightClass?: string;
+}
+
+function PreviewGrid({
+  columns, activeRows, headerRow,
+  interactive = true,
+  isCellClickable, onCellClick, rowTint, cellHighlight, cellDecoration,
+  maxHeightClass = "max-h-96",
+}: PreviewGridProps) {
+  return (
+    <div className={`border-2 rounded overflow-auto ${maxHeightClass} ${
+      interactive ? "border-[#222222]/40 ring-1 ring-blue-100" : "border-gray-200 opacity-70"
+    }`}>
+      <table className="text-[11px] font-mono w-full border-collapse">
+        <tbody>
+          {activeRows.map((row, ri) => {
+            const isHeader = ri === headerRow;
+            const cells = isHeader ? columns : row;
+            const tint = !isHeader ? rowTint?.(ri) : undefined;
+            const rowBg = isHeader
+              ? "bg-gray-900/95"
+              : tint === "credit" ? "bg-emerald-50"
+              : tint === "skip"   ? "bg-gray-50 text-gray-400"
+              : "even:bg-gray-50";
+            return (
+              <tr key={ri} className={rowBg}>
+                <td className={`w-8 px-2 py-1 text-center font-bold border-r text-[10px] select-none ${
+                  isHeader ? "bg-transparent text-white/70 border-white/20" : "bg-gray-50 text-gray-400 border-gray-200"
+                }`}>
+                  {ri}
+                </td>
+                {cells.map((cell, ci) => {
+                  const clickable = interactive && (isCellClickable?.(ri, ci, isHeader) ?? false);
+                  const highlighted = cellHighlight?.(ri, ci, isHeader) ?? false;
+                  return (
+                    <td
+                      key={ci}
+                      onClick={clickable ? () => onCellClick?.(ri, ci, isHeader) : undefined}
+                      className={`px-2 py-1 border-r whitespace-nowrap max-w-[160px] align-top ${
+                        isHeader ? "border-white/10 text-white font-bold" : "border-gray-100"
+                      } ${clickable ? "cursor-pointer hover:bg-blue-500/20" : ""} ${
+                        highlighted ? (isHeader ? "ring-2 ring-inset ring-amber-400 bg-amber-500/20" : "ring-2 ring-inset ring-[#222222] bg-blue-500/10") : ""
+                      }`}
+                    >
+                      <div className="truncate">{cell || (isHeader ? <span className="text-white/40 italic">empty</span> : "")}</div>
+                      {cellDecoration?.(ri, ci, isHeader)}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// StepColumns is a thin shell around two interchangeable mappers that both edit
+// the same `fieldMappings` state: the new click-to-map grid (default) and the
+// original per-field dropdowns (fallback). A toggle switches between them.
+function StepColumns(props: ColumnMapperProps) {
+  const [viewMode, setViewMode] = useState<"preview" | "dropdown">("preview");
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-black text-primary uppercase tracking-wider">Match Your Columns</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Tell us which part of your file holds each item. We&apos;ve pre-filled our best guesses — check each one and correct it if needed. Required items are marked <span className="text-red-500 font-bold">*</span>.
+          </p>
+        </div>
+        <div className="flex items-center bg-gray-100 rounded-md p-0.5 shrink-0">
+          {([["preview", "Pick from preview"], ["dropdown", "Use dropdowns"]] as const).map(([v, label]) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setViewMode(v)}
+              className={`text-[10px] font-black uppercase tracking-wider px-3 py-1.5 rounded-sm cursor-pointer transition-colors ${
+                viewMode === v ? "bg-white text-primary shadow-xs" : "text-gray-400 hover:text-gray-600"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {viewMode === "preview"
+        ? <PreviewColumnMapper {...props} />
+        : <DropdownColumnMapper {...props} />}
+    </div>
+  );
+}
+
+// ── Preview mode: field-first click-to-map ─────────────────────────────────────
+// Arm a field on the left, pick its source mode (Column / Cell / Combine / Fixed
+// / Not in file), then click in the grid. Column & Combine pick from the header
+// row; Cell picks any single cell (incl. metadata above the header).
+function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeRows, headerRow }: ColumnMapperProps) {
+  const hRow = headerRow ?? 0;
+  const [armed, setArmed] = useState<LogicalField>(LOGICAL_FIELDS[0].name);
+  const armedSrc = fieldMappings[armed];
+  const mode = armedSrc.type;
+
+  const updateField = (name: LogicalField, src: FieldSource) =>
+    setFieldMappings({ ...fieldMappings, [name]: src });
+
+  const setMode = (name: LogicalField, type: FieldSource["type"]) => {
+    const cur = fieldMappings[name];
+    if (type === "column")      updateField(name, { type: "column", name: cur.type === "column" ? cur.name ?? null : null });
+    else if (type === "cell")   updateField(name, { type: "cell", row: cur.type === "cell" ? cur.row ?? hRow : hRow, col: cur.type === "cell" ? cur.col ?? 0 : 0 });
+    else if (type === "concat") updateField(name, { type: "concat", names: cur.type === "concat" ? cur.names ?? [] : [], sep: cur.type === "concat" ? cur.sep ?? " " : " " });
+    else if (type === "fixed")  updateField(name, { type: "fixed", value: cur.type === "fixed" ? cur.value ?? "" : "" });
+    else                        updateField(name, { type: "none" });
+  };
+
+  const isMapped = (name: LogicalField): boolean => {
+    const field = LOGICAL_FIELDS.find((f) => f.name === name);
+    return field ? fieldSatisfied(field, fieldMappings[name]) : false;
+  };
+
+  // After a column assignment, jump to the next required field still unmapped.
+  const advanceFrom = (justSet: LogicalField) => {
+    const order = LOGICAL_FIELDS.map((f) => f.name);
+    const reqd = new Set(LOGICAL_FIELDS.filter((f) => f.required).map((f) => f.name));
+    const start = order.indexOf(justSet);
+    for (let k = 1; k < order.length; k++) {
+      const cand = order[(start + k) % order.length];
+      if (reqd.has(cand) && !isMapped(cand)) { setArmed(cand); return; }
+    }
+  };
+
+  const sampleRow = activeRows[hRow + 1] ?? [];
+  const columnSample = (colName: string | null | undefined): string => {
+    if (!colName) return "";
+    const idx = columns.indexOf(colName);
+    return idx >= 0 ? (sampleRow[idx] ?? "") : "";
+  };
+
+  // Fields sitting on a header column (column-type name match or concat member).
+  const fieldsOnColumn = (ci: number): LogicalField[] =>
+    LOGICAL_FIELDS.filter(({ name }) => {
+      const s = fieldMappings[name];
+      if (s.type === "column") return s.name === columns[ci];
+      if (s.type === "concat") return (s.names ?? []).includes(columns[ci]);
+      return false;
+    }).map((f) => f.name);
+
+  const fieldOnCell = (ri: number, ci: number): LogicalField | undefined =>
+    LOGICAL_FIELDS.find(({ name }) => {
+      const s = fieldMappings[name];
+      return s.type === "cell" && s.row === ri && s.col === ci;
+    })?.name;
+
+  const handleCellClick = (ri: number, ci: number) => {
+    const isHeader = ri === hRow;
+    if (mode === "cell") {
+      updateField(armed, { type: "cell", row: ri, col: ci });
+      return;
+    }
+    if (!isHeader) return;                       // Column & Combine pick from the header row only
+    const colName = columns[ci];
+    if (mode === "column") {
+      updateField(armed, { type: "column", name: colName });
+      advanceFrom(armed);
+    } else if (mode === "concat") {
+      const cur = armedSrc.type === "concat" ? armedSrc.names ?? [] : [];
+      const next = cur.includes(colName) ? cur.filter((x) => x !== colName) : [...cur, colName];
+      updateField(armed, { type: "concat", names: next, sep: armedSrc.type === "concat" ? armedSrc.sep ?? " " : " " });
+    }
+    // fixed / none: header clicks do nothing
+  };
+
+  const summary = (name: LogicalField): string => {
+    const s = fieldMappings[name];
+    if (s.type === "column") return s.name ? `Column: ${s.name}` : "Click a column header…";
+    if (s.type === "cell") {
+      const v = String(activeRows[s.row ?? 0]?.[s.col ?? 0] ?? "");
+      return `Cell R${s.row}·C${s.col}${v ? ` → "${v}"` : ""}`;
+    }
+    if (s.type === "concat") return (s.names?.length ?? 0) ? `Combine: ${(s.names ?? []).join(" + ")}` : "Click column headers…";
+    if (s.type === "fixed")  return s.value?.trim() ? `Fixed: "${s.value}"` : "Type a value…";
+    return "Not in this file";
+  };
+
+  const gridInteractive = mode === "column" || mode === "concat" || mode === "cell";
+  const armedLabel = LOGICAL_FIELDS.find((f) => f.name === armed)?.label;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+      {/* Field rail */}
+      <div className="lg:col-span-2 space-y-2">
+        {LOGICAL_FIELDS.map(({ name, label, required }) => {
+          const active = armed === name;
+          const mapped = isMapped(name);
+          const st = FIELD_STYLE[name];
+          return (
+            <div
+              key={name}
+              onClick={() => setArmed(name)}
+              className={`rounded-md border p-2.5 cursor-pointer transition-colors ${
+                active ? `${st.card} ring-2 ${st.ring}` : "border-gray-200 bg-white hover:border-gray-300"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${st.dot}`} />
+                <span className="text-xs font-black text-primary uppercase tracking-wider">
+                  {label} {required && <span className="text-red-500">*</span>}
+                </span>
+                {mapped && <Check size={13} className="text-emerald-500 ml-auto shrink-0" />}
+              </div>
+              <div className={`text-[10px] mt-1 font-mono truncate ${mapped ? "text-gray-600" : "text-gray-400 italic"}`}>
+                {summary(name)}
+              </div>
+
+              {active && (
+                <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex flex-wrap gap-1">
+                    {MODE_CHIPS.map((chip) => (
+                      <button
+                        key={chip.type}
+                        type="button"
+                        onClick={() => setMode(name, chip.type)}
+                        className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-sm border cursor-pointer ${
+                          mode === chip.type
+                            ? "bg-[#222222] text-white border-[#222222]"
+                            : "bg-white text-gray-500 border-gray-300 hover:border-gray-400"
+                        }`}
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {mode === "fixed" && (
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder="Value used for every row…"
+                      value={armedSrc.type === "fixed" ? armedSrc.value ?? "" : ""}
+                      onChange={(e) => updateField(name, { type: "fixed", value: e.target.value })}
+                      className="w-full text-xs border border-gray-300 rounded-sm px-2 py-1 font-mono focus:outline-none focus:border-[#222222]"
+                    />
+                  )}
+
+                  {mode === "concat" && (
+                    <div className="flex items-center gap-2 text-[10px]">
+                      <span className="text-gray-500">Separator</span>
+                      <input
+                        value={armedSrc.type === "concat" ? armedSrc.sep ?? " " : " "}
+                        onChange={(e) => updateField(name, { type: "concat", names: armedSrc.type === "concat" ? armedSrc.names ?? [] : [], sep: e.target.value })}
+                        className="border border-gray-300 rounded-sm px-2 py-0.5 w-14 font-mono focus:outline-none"
+                      />
+                    </div>
+                  )}
+
+                  {mode === "column" && (
+                    <div className="text-[10px] text-gray-500">
+                      {armedSrc.type === "column" && armedSrc.name ? (
+                        <>Sample: <span className="font-mono bg-white/70 px-1.5 py-0.5 rounded">{columnSample(armedSrc.name) ? `"${columnSample(armedSrc.name)}"` : <span className="italic text-gray-400">empty</span>}</span></>
+                      ) : (
+                        <span className="italic">Click a column header in the grid →</span>
+                      )}
+                    </div>
+                  )}
+
+                  {mode === "cell" && (
+                    <div className="text-[10px] text-gray-500 italic">Click any cell in the grid →</div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Clickable grid */}
+      <div className="lg:col-span-3 space-y-2">
+        <div className="flex items-start gap-2 text-[11px] text-[#222222] bg-blue-50 border border-[#222222]/30 rounded px-3 py-2 font-medium">
+          <MousePointerClick size={13} className="shrink-0 mt-0.5" />
+          <span>
+            <strong>{armedLabel}</strong> selected ({MODE_CHIPS.find((c) => c.type === mode)?.label}).{" "}
+            {mode === "column" && "Click a column header to assign it."}
+            {mode === "concat" && "Click column headers to combine them."}
+            {mode === "cell" && "Click any cell to use its exact value."}
+            {mode === "fixed" && "This field uses a typed value — no grid click needed."}
+            {mode === "none" && "This field is marked as not present — no grid click needed."}
+          </span>
+        </div>
+
+        <PreviewGrid
+          columns={columns}
+          activeRows={activeRows}
+          headerRow={hRow}
+          interactive={gridInteractive}
+          isCellClickable={(ri, ci, isHeader) =>
+            mode === "cell" ? true : (isHeader && (mode === "column" || mode === "concat"))}
+          onCellClick={(ri, ci) => handleCellClick(ri, ci)}
+          cellHighlight={(ri, ci, isHeader) => {
+            if (mode === "cell") return armedSrc.type === "cell" && armedSrc.row === ri && armedSrc.col === ci;
+            if (!isHeader) return false;
+            if (mode === "column") return armedSrc.type === "column" && armedSrc.name === columns[ci];
+            if (mode === "concat") return armedSrc.type === "concat" && (armedSrc.names ?? []).includes(columns[ci]);
+            return false;
+          }}
+          cellDecoration={(ri, ci, isHeader) => {
+            const onCol = isHeader ? fieldsOnColumn(ci) : [];
+            const cellField = fieldOnCell(ri, ci);
+            if (onCol.length === 0 && !cellField) return null;
+            return (
+              <div className="flex flex-wrap gap-0.5 mt-0.5">
+                {onCol.map((f) => (
+                  <span key={f} className={`text-[8px] font-black uppercase px-1 py-px rounded-sm ${FIELD_STYLE[f].badge}`}>{FIELD_SHORT[f]}</span>
+                ))}
+                {cellField && (
+                  <span className={`text-[8px] font-black uppercase px-1 py-px rounded-sm ${FIELD_STYLE[cellField].badge}`}>{FIELD_SHORT[cellField]}</span>
+                )}
+              </div>
+            );
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Dropdown mode: the original per-field source pickers (fallback) ────────────
+function DropdownColumnMapper({ columns, fieldMappings, setFieldMappings, activeRows, headerRow }: ColumnMapperProps) {
   const updateField = (name: LogicalField, src: FieldSource) =>
     setFieldMappings({ ...fieldMappings, [name]: src });
 
@@ -876,15 +1289,6 @@ function StepColumns({
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-sm font-black text-primary uppercase tracking-wider">Match Your Columns</h2>
-        <p className="text-xs text-gray-500 mt-1">
-          For each item below, tell us which column in your file holds it. We've made our best guess — just check each one and correct it if needed. Hover the
-          <Info size={11} className="inline mx-0.5 -mt-0.5 text-gray-400" />
-          icon for help. Required items are marked <span className="text-red-500 font-bold">*</span>.
-        </p>
-      </div>
-
       <div className="space-y-3">
         {LOGICAL_FIELDS.map(({ name, label, required }) => {
           const src = fieldMappings[name];
@@ -1069,19 +1473,27 @@ function StepColumns({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function StepCreditRule({
-  columns, creditRule, setCreditRule,
+  columns, creditRule, setCreditRule, activeRows, headerRow, subHeaderRow,
 }: {
   columns: string[];
   creditRule: CreditRuleConfig;
   setCreditRule: (r: CreditRuleConfig) => void;
+  activeRows: string[][];
+  headerRow: number | null;
+  subHeaderRow: number | null;
 }) {
+  const hRow = headerRow ?? 0;
+  // Data begins after the header AND the optional sub-header row — otherwise the
+  // sub-header (e.g. a "Dr / Cr" label row under merged Amount columns) gets
+  // tinted as a credit because its cell text is non-blank.
+  const dataStart = subHeaderRow != null ? Math.max(hRow, subHeaderRow) : hRow;
+
   const RULE_OPTIONS: {
     value: CreditRuleConfig["type"];
     title: string;
     question: string;
     columnLabel: string;
     columnHelp: string;
-    preview: { headers: string[]; rows: (string | { v: string; highlight?: boolean })[][] };
   }[] = [
     {
       value: "column_not_blank",
@@ -1089,14 +1501,6 @@ function StepCreditRule({
       question: 'Look at your spreadsheet — do you see two separate columns, one labelled something like "Credit" and another "Debit"? If yes, pick this option.',
       columnLabel: "Which column is the Credit amount column?",
       columnHelp: "The column that holds the money received (credited). Any row with a value here is treated as a credit; blank rows are debits and get skipped.",
-      preview: {
-        headers: ["Date", "Narrative", "Debit", "Credit"],
-        rows: [
-          ["01 Jun", "Salary received", "", { v: "50,000.00", highlight: true }],
-          ["02 Jun", "Rent payment",    { v: "20,000.00", highlight: false }, ""],
-          ["03 Jun", "Client payment",  "", { v: "12,500.00", highlight: true }],
-        ],
-      },
     },
     {
       value: "amount_positive",
@@ -1104,14 +1508,6 @@ function StepCreditRule({
       question: 'Look at your spreadsheet — is there a single "Amount" column where credits show as positive numbers and debits show as negative (with a minus sign or in brackets)?',
       columnLabel: "Which column is the Amount column?",
       columnHelp: "The single signed money column. Positive values are treated as credits; negative values (minus sign or brackets) are debits and get skipped.",
-      preview: {
-        headers: ["Date", "Narrative", "Amount"],
-        rows: [
-          ["01 Jun", "Salary received", { v: "+50,000.00", highlight: true }],
-          ["02 Jun", "Rent payment",    { v: "-20,000.00", highlight: false }],
-          ["03 Jun", "Client payment",  { v: "+12,500.00", highlight: true }],
-        ],
-      },
     },
     {
       value: "flag_matches",
@@ -1119,115 +1515,131 @@ function StepCreditRule({
       question: 'Look at your spreadsheet — is there a column that simply says "CR" or "DR" (or "Credit" / "Debit") next to each row to indicate its type?',
       columnLabel: "Which column contains the CR / DR label?",
       columnHelp: "The flag column that marks each row as credit or debit. Rows flagged CR / Credit are kept; DR / Debit rows are skipped.",
-      preview: {
-        headers: ["Date", "Narrative", "Amount", "Type"],
-        rows: [
-          ["01 Jun", "Salary received", "50,000.00", { v: "CR", highlight: true }],
-          ["02 Jun", "Rent payment",    "20,000.00", { v: "DR", highlight: false }],
-          ["03 Jun", "Client payment",  "12,500.00", { v: "CR", highlight: true }],
-        ],
-      },
     },
   ];
 
   const selected = RULE_OPTIONS.find((r) => r.value === creditRule.type);
+  const creditColIdx = creditRule.field ? columns.indexOf(creditRule.field) : -1;
 
-  function MiniTable({ headers, rows }: { headers: string[]; rows: (string | { v: string; highlight?: boolean })[][] }) {
-    return (
-      <table className="w-full text-[9px] border-collapse">
-        <thead>
-          <tr>
-            {headers.map((h) => (
-              <th key={h} className="border border-gray-200 bg-gray-100 px-1.5 py-0.5 text-left font-black text-gray-500 uppercase tracking-wide">{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, ri) => (
-            <tr key={ri} className="even:bg-gray-50">
-              {row.map((cell, ci) => {
-                const val   = typeof cell === "string" ? cell : cell.v;
-                const hl    = typeof cell === "object" && cell.highlight;
-                return (
-                  <td key={ci} className={`border border-gray-200 px-1.5 py-0.5 font-mono ${hl ? "bg-emerald-100 text-emerald-700 font-black" : "text-gray-600"}`}>
-                    {val}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    );
-  }
+  // Client-side approximations that mirror the backend rules, just to tint the
+  // preview. The Step 6 Test run remains the source of truth.
+  const parseAmount = (raw: string): number | null => {
+    const s = (raw ?? "").trim();
+    if (!s) return null;
+    const neg = /^\(.*\)$/.test(s) || s.includes("-");
+    const digits = s.replace(/[^0-9.]/g, "");
+    if (!digits) return null;
+    const n = parseFloat(digits);
+    return Number.isNaN(n) ? null : (neg ? -n : n);
+  };
+  const flagMatch = (raw: string): boolean => {
+    const val = (raw ?? "").trim();
+    if (!val) return false;
+    let p = creditRule.pattern ?? "(?i)cr";
+    const ci = /^\(\?i\)/.test(p);
+    p = p.replace(/^\(\?i\)/, "");
+    try { return new RegExp(p, ci ? "i" : "").test(val); }
+    catch { return val.toLowerCase().includes("cr"); }
+  };
+  const rowIsCredit = (ri: number): boolean => {
+    if (creditColIdx < 0) return false;
+    const cell = String(activeRows[ri]?.[creditColIdx] ?? "");
+    if (creditRule.type === "column_not_blank") return !!cell.trim();
+    if (creditRule.type === "amount_positive") { const n = parseAmount(cell); return n !== null && n > 0; }
+    if (creditRule.type === "flag_matches") return flagMatch(cell);
+    return false;
+  };
+  const rowTint = (ri: number): "credit" | "skip" | undefined => {
+    if (creditColIdx < 0 || ri <= dataStart) return undefined;
+    return rowIsCredit(ri) ? "credit" : "skip";
+  };
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-sm font-black text-primary uppercase tracking-wider">How does your bank show credits?</h2>
-        <p className="text-xs text-gray-500 mt-1">
-          Look at your spreadsheet and pick the option that matches what you see. The highlighted cells in each example show what the system will treat as a credit.
-        </p>
-      </div>
-
-      <div className="space-y-3">
-        {RULE_OPTIONS.map((opt) => {
-          const isSelected = creditRule.type === opt.value;
-          return (
-            <label
-              key={opt.value}
-              className={`flex items-start gap-3 p-3 border rounded-md cursor-pointer transition-colors ${
-                isSelected ? "border-[#222222] bg-[#222222]/5" : "border-gray-200 hover:border-gray-300 bg-white"
-              }`}
-            >
-              <input
-                type="radio"
-                name="credit_rule_type"
-                value={opt.value}
-                checked={isSelected}
-                onChange={() => {
-                  const update: CreditRuleConfig = { type: opt.value, field: creditRule.field };
-                  if (opt.value === "flag_matches") update.pattern = "(?i)cr";
-                  setCreditRule(update);
-                }}
-                className="mt-0.5 cursor-pointer shrink-0"
-              />
-              <div className="min-w-0 flex-1 space-y-2">
-                <div className="text-xs font-black text-primary">{opt.title}</div>
-                <div className="text-[10px] text-gray-500 leading-relaxed">{opt.question}</div>
-                {isSelected && (
-                  <div className="mt-2 rounded border border-gray-200 overflow-hidden">
-                    <MiniTable headers={opt.preview.headers} rows={opt.preview.rows} />
-                  </div>
-                )}
-              </div>
-            </label>
-          );
-        })}
-      </div>
-
-      {/* Column picker */}
-      {selected && (
-        <div className="bg-gray-50 border border-gray-200 rounded p-3">
-          <label className="flex items-center gap-1 text-[10px] font-black text-gray-500 uppercase tracking-wider mb-1">
-            {selected.columnLabel} <span className="text-red-500">*</span>
-          </label>
-          <p className="text-[10px] text-gray-400 leading-snug mb-2">{selected.columnHelp}</p>
-          <div className="relative max-w-xs">
-            <select
-              value={creditRule.field}
-              onChange={(e) => setCreditRule({ ...creditRule, field: e.target.value })}
-              className="w-full text-xs font-mono border border-gray-300 rounded-sm px-3 py-1.5 appearance-none bg-white pr-7 focus:outline-none focus:border-[#222222]"
-            >
-              <option value="">— Select a column from your sheet —</option>
-              {columns.map((c, i) => (
-                <option key={i} value={c}>{c || `Col_${i}`}</option>
-              ))}
-            </select>
-            <ChevronDown size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
+    <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+      {/* Left: rule choice + column dropdown */}
+      <div className="lg:col-span-2 space-y-4">
+        <div>
+          <h2 className="text-sm font-black text-primary uppercase tracking-wider">How does your bank show credits?</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Pick the option that matches your statement, then choose the column that carries it. The preview on the right highlights the rows that rule would keep as credits.
+          </p>
         </div>
-      )}
+
+        {/* rule-type cards */}
+        <div className="space-y-2">
+          {RULE_OPTIONS.map((opt) => {
+            const isSelected = creditRule.type === opt.value;
+            return (
+              <label
+                key={opt.value}
+                className={`flex items-start gap-3 p-3 border rounded-md cursor-pointer transition-colors ${
+                  isSelected ? "border-[#222222] bg-[#222222]/5" : "border-gray-200 hover:border-gray-300 bg-white"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="credit_rule_type"
+                  value={opt.value}
+                  checked={isSelected}
+                  onChange={() => {
+                    const update: CreditRuleConfig = { type: opt.value, field: creditRule.field };
+                    if (opt.value === "flag_matches") update.pattern = "(?i)cr";
+                    setCreditRule(update);
+                  }}
+                  className="mt-0.5 cursor-pointer shrink-0"
+                />
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="text-xs font-black text-primary">{opt.title}</div>
+                  <div className="text-[10px] text-gray-500 leading-relaxed">{opt.question}</div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+
+        {/* column dropdown */}
+        {selected && (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1 text-[10px] font-black text-gray-500 uppercase tracking-wider">
+              {selected.columnLabel} <span className="text-red-500">*</span>
+            </div>
+            <p className="text-[10px] text-gray-400 leading-snug">{selected.columnHelp}</p>
+            <div className="relative">
+              <select
+                value={creditRule.field}
+                onChange={(e) => setCreditRule({ ...creditRule, field: e.target.value })}
+                className="w-full text-xs font-mono border border-gray-300 rounded-sm px-3 py-1.5 appearance-none bg-white pr-7 focus:outline-none focus:border-[#222222]"
+              >
+                <option value="">— Select a column from your sheet —</option>
+                {columns.map((c, i) => (
+                  <option key={i} value={c}>{c || `Col_${i}`}</option>
+                ))}
+              </select>
+              <ChevronDown size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Right: read-only file preview with live credit/skip highlight */}
+      <div className="lg:col-span-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider">File preview</span>
+          <span className="flex items-center gap-3 text-[10px] text-gray-500">
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-emerald-50 border border-emerald-300" /> Treated as credit</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-gray-100 border border-gray-300" /> Skipped</span>
+          </span>
+        </div>
+        {creditRule.field
+          ? <p className="text-[10px] text-gray-500">Highlighting based on <span className="font-mono">{creditRule.field}</span>. Pick a column to see the effect.</p>
+          : <p className="text-[10px] text-gray-400 italic">Select a column on the left to preview which rows are kept.</p>}
+        <PreviewGrid
+          columns={columns}
+          activeRows={activeRows}
+          headerRow={hRow}
+          rowTint={rowTint}
+        />
+      </div>
     </div>
   );
 }
@@ -1482,12 +1894,13 @@ function StepTestRun({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function StepLocateAccount({
-  columns, activeRows, accountLocator, setAccountLocator,
+  columns, activeRows, headerRow, accountLocator, setAccountLocator,
   foundAccounts, existingFormats, accountNumber, setAccountNumber,
   locating, locateError, handleLocate, extension,
 }: {
   columns: string[];
   activeRows: string[][];
+  headerRow: number | null;
   accountLocator: AccountLocator;
   setAccountLocator: (l: AccountLocator) => void;
   foundAccounts: string[];
@@ -1501,137 +1914,220 @@ function StepLocateAccount({
 }) {
   const t = accountLocator.type;
   const fmt = extension === "txt" ? "csv" : extension === "xlsm" ? "xlsx" : extension;
+  const [viewMode, setViewMode] = useState<"preview" | "dropdown">("preview");
+  const hRow = headerRow ?? 0;
+  const cellValue = String(activeRows[accountLocator.row ?? 0]?.[accountLocator.col ?? 0] ?? "");
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-sm font-black text-primary uppercase tracking-wider">Where is the account number?</h2>
-        <p className="text-xs text-gray-500 mt-1">
-          The account number is how this bank statement is recognised — filenames are ignored. Tell us where it appears, then click <strong>Find account</strong>.
-        </p>
+    <div className="space-y-3">
+      {/* header + mode toggle */}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-black text-primary uppercase tracking-wider">Where is the account number?</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            The account number is how this bank statement is recognised — filenames are ignored. Tell us where it appears, then click <strong>Find account</strong>.
+          </p>
+        </div>
+        <div className="flex items-center bg-gray-100 rounded-md p-0.5 shrink-0">
+          {([["preview", "Pick from preview"], ["dropdown", "Use dropdowns"]] as const).map(([v, label]) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setViewMode(v)}
+              className={`text-[10px] font-black uppercase tracking-wider px-3 py-1.5 rounded-sm cursor-pointer transition-colors ${
+                viewMode === v ? "bg-white text-primary shadow-xs" : "text-gray-400 hover:text-gray-600"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* locator type */}
-      <div className="flex flex-wrap gap-2">
-        {([
-          { v: "cell",   label: "In a fixed cell" },
-          { v: "column", label: "In a column (one per row)" },
-          { v: "regex",  label: "Inside a text column (pattern)" },
-        ] as const).map((o) => (
-          <button
-            key={o.v}
-            type="button"
-            onClick={() => {
-              if (o.v === "cell") setAccountLocator({ type: "cell", row: 0, col: 1 });
-              else if (o.v === "column") setAccountLocator({ type: "column", name: columns[0] ?? "" });
-              else setAccountLocator({ type: "regex", in: { type: "column", name: columns[0] ?? "" }, pattern: AUTO_ACCOUNT_REGEX });
-            }}
-            className={`text-[11px] font-bold px-3 py-1.5 rounded-sm border cursor-pointer ${
-              t === o.v ? "bg-[#222222] text-white border-[#222222]" : "bg-white text-gray-600 border-gray-300 hover:border-[#222222]"
-            }`}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        {/* LEFT: locator controls, Find button, results */}
+        <div className="lg:col-span-2 space-y-3">
+          {/* locator type */}
+          <div className="flex flex-wrap gap-2">
+            {([
+              { v: "cell",   label: "In a fixed cell" },
+              { v: "column", label: "In a column (one per row)" },
+              { v: "regex",  label: "Inside a text column (pattern)" },
+            ] as const).map((o) => (
+              <button
+                key={o.v}
+                type="button"
+                onClick={() => {
+                  if (o.v === "cell") setAccountLocator({ type: "cell", row: 0, col: 1 });
+                  else if (o.v === "column") setAccountLocator({ type: "column", name: columns[0] ?? "" });
+                  else setAccountLocator({ type: "regex", in: { type: "column", name: columns[0] ?? "" }, pattern: AUTO_ACCOUNT_REGEX });
+                }}
+                className={`text-[11px] font-bold px-3 py-1.5 rounded-sm border cursor-pointer ${
+                  t === o.v ? "bg-[#222222] text-white border-[#222222]" : "bg-white text-gray-600 border-gray-300 hover:border-[#222222]"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
 
-      {/* type-specific inputs */}
-      <div className="bg-gray-50 border border-gray-200 rounded p-3 space-y-2 text-xs">
-        {t === "cell" && (
-          <div className="flex items-center gap-2">
-            <label className="text-gray-500">Row</label>
-            <input type="number" min={0} value={accountLocator.row ?? 0}
-              onChange={(e) => setAccountLocator({ ...accountLocator, row: Number(e.target.value) })}
-              className="border border-gray-300 rounded-sm px-2 py-1 w-16 font-mono" />
-            <label className="text-gray-500">Col</label>
-            <input type="number" min={0} value={accountLocator.col ?? 0}
-              onChange={(e) => setAccountLocator({ ...accountLocator, col: Number(e.target.value) })}
-              className="border border-gray-300 rounded-sm px-2 py-1 w-16 font-mono" />
-            {activeRows[accountLocator.row ?? 0]?.[accountLocator.col ?? 0] && (
-              <span className="text-[10px] text-gray-500 font-mono bg-gray-100 px-1.5 py-0.5 rounded truncate max-w-[160px]">
-                "{activeRows[accountLocator.row ?? 0]?.[accountLocator.col ?? 0]}"
+          {/* input area */}
+          <div className="bg-gray-50 border border-gray-200 rounded p-3 space-y-2 text-xs">
+            {viewMode === "dropdown" ? (
+              <>
+                {t === "cell" && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-gray-500">Row</label>
+                    <input type="number" min={0} value={accountLocator.row ?? 0}
+                      onChange={(e) => setAccountLocator({ ...accountLocator, row: Number(e.target.value) })}
+                      className="border border-gray-300 rounded-sm px-2 py-1 w-16 font-mono" />
+                    <label className="text-gray-500">Col</label>
+                    <input type="number" min={0} value={accountLocator.col ?? 0}
+                      onChange={(e) => setAccountLocator({ ...accountLocator, col: Number(e.target.value) })}
+                      className="border border-gray-300 rounded-sm px-2 py-1 w-16 font-mono" />
+                    {cellValue && (
+                      <span className="text-[10px] text-gray-500 font-mono bg-gray-100 px-1.5 py-0.5 rounded truncate max-w-[140px]">
+                        &quot;{cellValue}&quot;
+                      </span>
+                    )}
+                  </div>
+                )}
+                {t === "column" && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-gray-500">Column</label>
+                    <select value={accountLocator.name ?? ""}
+                      onChange={(e) => setAccountLocator({ ...accountLocator, name: e.target.value })}
+                      className="border border-gray-300 rounded-sm px-2 py-1 font-mono text-xs">
+                      <option value="">— pick —</option>
+                      {columns.map((c, i) => <option key={i} value={c}>{c || `Col_${i}`}</option>)}
+                    </select>
+                  </div>
+                )}
+                {t === "regex" && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-gray-500">In column</label>
+                    <select value={accountLocator.in?.name ?? ""}
+                      onChange={(e) => setAccountLocator({ ...accountLocator, in: { type: "column", name: e.target.value } })}
+                      className="border border-gray-300 rounded-sm px-2 py-1 font-mono text-xs">
+                      <option value="">— pick —</option>
+                      {columns.map((c, i) => <option key={i} value={c}>{c || `Col_${i}`}</option>)}
+                    </select>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="flex items-start gap-2 text-[11px] text-[#222222] font-medium">
+                  <MousePointerClick size={13} className="shrink-0 mt-0.5" />
+                  <span>
+                    {t === "cell"   && "Click the cell in the preview that holds the account number (incl. rows above the header)."}
+                    {t === "column" && "Click the column header in the preview that holds the account number — one per row."}
+                    {t === "regex"  && "Click the text column header in the preview to scan for account-like values inside it."}
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-500">
+                  {t === "cell" && (accountLocator.row !== undefined
+                    ? <>Selected: <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">R{accountLocator.row}·C{accountLocator.col}{cellValue ? ` → "${cellValue}"` : ""}</span></>
+                    : <span className="italic">No cell selected yet.</span>)}
+                  {t === "column" && (accountLocator.name
+                    ? <>Column: <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{accountLocator.name}</span></>
+                    : <span className="italic">No column selected yet.</span>)}
+                  {t === "regex" && (accountLocator.in?.name
+                    ? <>Scanning column: <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{accountLocator.in.name}</span></>
+                    : <span className="italic">No column selected yet.</span>)}
+                </div>
+              </>
+            )}
+
+            {/* regex explainer — shown in both modes since detection is automatic */}
+            {t === "regex" && (
+              <div className="flex items-start gap-2 text-[10px] text-gray-500 bg-white border border-gray-200 rounded p-2">
+                <Info size={12} className="shrink-0 mt-0.5 text-[#222222]" />
+                <span>
+                  We automatically detect account-number-like values inside this column —
+                  numeric (e.g. <span className="font-mono">000205024781</span>) and
+                  alphanumeric / IBAN-style (e.g. <span className="font-mono">GB29NWBK…</span>),
+                  even when buried in text like “… (INR) - 000205024781”. Pick the column,
+                  click <strong>Find account</strong>, then choose the right one below.
+                </span>
+              </div>
+            )}
+
+            <button type="button" onClick={handleLocate} disabled={locating}
+              className="flex items-center gap-2 bg-[#222222] hover:bg-[#222222] text-white text-[11px] font-black uppercase tracking-wider px-4 py-2 rounded-sm cursor-pointer disabled:opacity-50">
+              {locating ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} className="fill-current" />}
+              Find account
+            </button>
+          </div>
+
+          {locateError && (
+            <div className="flex items-center gap-2 text-red-700 text-xs bg-red-50 border border-red-200 px-3 py-2 rounded">
+              <AlertCircle size={14} /> {locateError}
+            </div>
+          )}
+
+          {/* results */}
+          {foundAccounts.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
+                Found {foundAccounts.length} account{foundAccounts.length === 1 ? "" : "s"} — pick the one this config is for
+              </div>
+              <div className="space-y-1.5">
+                {foundAccounts.map((a) => {
+                  const exists = existingFormats[a];
+                  return (
+                    <label key={a} className={`flex flex-wrap items-center gap-2 border rounded p-2 cursor-pointer ${accountNumber === a ? "border-[#222222] bg-[#222222]/5" : "border-gray-200"}`}>
+                      <input type="radio" name="acct" checked={accountNumber === a} onChange={() => setAccountNumber(a)} />
+                      <span className="font-mono text-xs font-bold text-primary">{a}</span>
+                      {exists && (
+                        <span className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs">
+                          <AlertTriangle size={10} /> exists ({exists.join(", ")})
+                          {exists.includes(fmt) ? ` — saving adds a new ${fmt} version` : ` — this adds a ${fmt} recipe`}
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {accountNumber && (
+            <div className="text-xs text-gray-600">
+              This config will be keyed to account <span className="font-mono font-bold">{accountNumber}</span>.
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT: preview grid (clickable only in preview mode) */}
+        <div className="lg:col-span-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider">File preview</span>
+            {viewMode === "preview" && (
+              <span className="text-[10px] text-[#222222] font-medium flex items-center gap-1">
+                <MousePointerClick size={11} /> click to select
               </span>
             )}
           </div>
-        )}
-        {t === "column" && (
-          <div className="flex items-center gap-2">
-            <label className="text-gray-500">Column</label>
-            <select value={accountLocator.name ?? ""}
-              onChange={(e) => setAccountLocator({ ...accountLocator, name: e.target.value })}
-              className="border border-gray-300 rounded-sm px-2 py-1 font-mono text-xs">
-              <option value="">— pick —</option>
-              {columns.map((c, i) => <option key={i} value={c}>{c || `Col_${i}`}</option>)}
-            </select>
-          </div>
-        )}
-        {t === "regex" && (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <label className="text-gray-500">In column</label>
-              <select value={accountLocator.in?.name ?? ""}
-                onChange={(e) => setAccountLocator({ ...accountLocator, in: { type: "column", name: e.target.value } })}
-                className="border border-gray-300 rounded-sm px-2 py-1 font-mono text-xs">
-                <option value="">— pick —</option>
-                {columns.map((c, i) => <option key={i} value={c}>{c || `Col_${i}`}</option>)}
-              </select>
-            </div>
-            <div className="flex items-start gap-2 text-[10px] text-gray-500 bg-white border border-gray-200 rounded p-2">
-              <Info size={12} className="shrink-0 mt-0.5 text-[#222222]" />
-              <span>
-                We automatically detect account-number-like values inside this column —
-                numeric (e.g. <span className="font-mono">000205024781</span>) and
-                alphanumeric / IBAN-style (e.g. <span className="font-mono">GB29NWBK…</span>),
-                even when buried in text like “… (INR) - 000205024781”. Just pick the column
-                and click <strong>Find account</strong>, then choose the right one below.
-              </span>
-            </div>
-          </div>
-        )}
-        <button type="button" onClick={handleLocate} disabled={locating}
-          className="flex items-center gap-2 bg-[#222222] hover:bg-[#222222] text-white text-[11px] font-black uppercase tracking-wider px-4 py-2 rounded-sm cursor-pointer disabled:opacity-50">
-          {locating ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} className="fill-current" />}
-          Find account
-        </button>
+          <PreviewGrid
+            columns={columns}
+            activeRows={activeRows}
+            headerRow={hRow}
+            isCellClickable={(ri, ci, isHeader) => viewMode === "preview" && (t === "cell" ? true : isHeader)}
+            onCellClick={(ri, ci, isHeader) => {
+              if (t === "cell") setAccountLocator({ type: "cell", row: ri, col: ci });
+              else if (isHeader && t === "column") setAccountLocator({ type: "column", name: columns[ci] });
+              else if (isHeader && t === "regex") setAccountLocator({ type: "regex", in: { type: "column", name: columns[ci] }, pattern: accountLocator.pattern ?? AUTO_ACCOUNT_REGEX });
+            }}
+            cellHighlight={(ri, ci, isHeader) => {
+              if (t === "cell") return accountLocator.row === ri && accountLocator.col === ci;
+              if (isHeader && t === "column") return accountLocator.name === columns[ci];
+              if (isHeader && t === "regex") return accountLocator.in?.name === columns[ci];
+              return false;
+            }}
+          />
+        </div>
       </div>
-
-      {locateError && (
-        <div className="flex items-center gap-2 text-red-700 text-xs bg-red-50 border border-red-200 px-3 py-2 rounded">
-          <AlertCircle size={14} /> {locateError}
-        </div>
-      )}
-
-      {/* results */}
-      {foundAccounts.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
-            Found {foundAccounts.length} account{foundAccounts.length === 1 ? "" : "s"} — pick the one this config is for
-          </div>
-          <div className="space-y-1.5">
-            {foundAccounts.map((a) => {
-              const exists = existingFormats[a];
-              return (
-                <label key={a} className={`flex items-center gap-2 border rounded p-2 cursor-pointer ${accountNumber === a ? "border-[#222222] bg-[#222222]/5" : "border-gray-200"}`}>
-                  <input type="radio" name="acct" checked={accountNumber === a} onChange={() => setAccountNumber(a)} />
-                  <span className="font-mono text-xs font-bold text-primary">{a}</span>
-                  {exists && (
-                    <span className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs">
-                      <AlertTriangle size={10} /> exists ({exists.join(", ")})
-                      {exists.includes(fmt) ? ` — saving adds a new ${fmt} version` : ` — this adds a ${fmt} recipe`}
-                    </span>
-                  )}
-                </label>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {accountNumber && (
-        <div className="text-xs text-gray-600">
-          This config will be keyed to account <span className="font-mono font-bold">{accountNumber}</span>.
-        </div>
-      )}
     </div>
   );
 }
