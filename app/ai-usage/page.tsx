@@ -44,7 +44,7 @@ import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
 
 export default function AiUsagePage() {
-  const { allowed, checking } = usePageGuard("canViewData");
+  const { allowed, checking } = usePageGuard("run:view");
   const [summary, setSummary] = useState<AiUsageSummary | null>(null);
   const [totals, setTotals]   = useState<AiUsageTotals | null>(null);
   const [recentRuns, setRecentRuns] = useState<AiUsageRecentRun[]>([]);

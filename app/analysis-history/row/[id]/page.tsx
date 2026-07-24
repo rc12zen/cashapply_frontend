@@ -65,7 +65,7 @@ import CrossOUEvidencePanel from "@/components/row-detail/CrossOUEvidencePanel";
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RowDetailPage() {
-  const { allowed, checking } = usePageGuard("canViewData");
+  const { allowed, checking } = usePageGuard("run:view");
   const params       = useParams();
   const router       = useRouter();
   const searchParams = useSearchParams();

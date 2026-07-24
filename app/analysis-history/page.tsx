@@ -221,7 +221,7 @@ export default function AnalysisHistoryPage() {
 }
 
 function AnalysisHistoryPageInner() {
-  const { allowed, checking } = usePageGuard("canViewData");
+  const { allowed, checking } = usePageGuard("run:view");
   const router = useRouter();
   const searchParams = useSearchParams();
   const [viewingRun, setViewingRun] = useState<AnalysisRun | null>(null);

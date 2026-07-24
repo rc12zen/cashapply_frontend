@@ -122,7 +122,7 @@ import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
 
 export default function ExecutiveSummaryPage() {
-  const { allowed, checking } = usePageGuard("canViewData");
+  const { allowed, checking } = usePageGuard("run:view");
   const [bankOptions, setBankOptions] = useState<string[]>([]);
   const [buOptions, setBuOptions] = useState<string[]>([]);
   const [pillDefs, setPillDefs] = useState<PillDef[]>([]);

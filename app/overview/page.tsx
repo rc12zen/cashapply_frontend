@@ -30,7 +30,7 @@ import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
 
 export default function OverviewPage() {
-  const { allowed, checking } = usePageGuard("canViewData");
+  const { allowed, checking } = usePageGuard("run:view");
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [error, setError]     = useState("");
   const [loading, setLoading] = useState(true);

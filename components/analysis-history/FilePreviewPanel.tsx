@@ -94,6 +94,10 @@ export default function FilePreviewPanel({ statementFiles = [], bucket = "active
     setStmtLoading(true); setStmtPreview(null); setFilter("");
     getFilePreview(activeFile, bucket, 200)
       .then((res) => { if (!cancelled) setStmtPreview(res.data); })
+      // Roles without run:monitor (e.g. Oracle Operator, Auditor) get a 403
+      // here — fail gracefully to an empty preview instead of an unhandled
+      // rejection (mirrors the aging-preview handler below).
+      .catch(() => { if (!cancelled) setStmtPreview(null); })
       .finally(() => { if (!cancelled) setStmtLoading(false); });
     return () => { cancelled = true; };
   }, [activeFile, bucket]);
