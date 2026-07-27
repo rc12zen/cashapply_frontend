@@ -32,13 +32,14 @@ import {
   AlertTriangle, ArrowLeft, CheckCircle2, Loader2,
   Mail, X, ZapIcon, ChevronLeft, Building2,
   User, Hash, Banknote, Check, FileText, Info,
-  ArrowRightLeft, Layers, GitBranch, RefreshCw, Download,
+  ArrowRightLeft, Layers, GitBranch, RefreshCw, Download, Pencil,
 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
   approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance,
   getMappingOptions, getInvoicesForCustomer, previewManualMapping, confirmManualMapping,
+  correctCustomerName,
   downloadStorageFile,
 } from "@/lib/api";
 
@@ -117,6 +118,24 @@ export default function RowDetailPage() {
   const canManuallyMap = !!detail
     && detail.category !== "ready_for_oracle"
     && detail.category !== "processed";
+
+  // Whether the AI-identified customer name can be corrected on this row.
+  // Mirrors rule_engine/customer_name_correction.py's _is_correctable()
+  // guard exactly: only for unidentified/needs_remittance/
+  // conflict_exception (the categories where the AI's own customer guess
+  // could plausibly be the actual problem — ready_for_oracle already
+  // matched cleanly, nothing to correct), AND never on a row that already
+  // has a SPOC decision recorded (approved/rejected -- oracle.hitl_status)
+  // or an existing manual invoice mapping -- re-running matching
+  // underneath either would silently overturn a human decision, which the
+  // backend refuses outright if attempted anyway.
+  const CUSTOMER_NAME_CORRECTABLE_CATEGORIES = new Set([
+    "unidentified", "needs_remittance", "conflict_exception",
+  ]);
+  const canCorrectCustomerName = !!detail
+    && CUSTOMER_NAME_CORRECTABLE_CATEGORIES.has(detail.category || "")
+    && !detail.manually_mapped
+    && !detail.oracle?.hitl_status;
 
   const fetchMappingOptions = useCallback(async () => {
     if (!recordId) return;
@@ -254,6 +273,42 @@ export default function RowDetailPage() {
       await fetchDetail();
     } catch (e: any) { setActionError(formatApiError(e, "Recheck failed.")); }
     setRecheckLoading(false);
+  };
+
+  // ── Customer name correction ────────────────────────────────────────────────
+  // Lets a SPOC fix a wrongly AI-identified customer name — see
+  // rule_engine/customer_name_correction.py. The backend re-runs the full
+  // matching + rule-evaluation pipeline against the corrected name, so
+  // fetchDetail() after a successful correction will show the row's NEW
+  // category (it may move to ready_for_oracle, stay put, or land
+  // somewhere else entirely — whatever the corrected name actually
+  // resolves to).
+  const [correctingCustomerName, setCorrectingCustomerName] = useState(false);
+  const [customerNameInput, setCustomerNameInput]           = useState("");
+  const [customerNameLoading, setCustomerNameLoading]       = useState(false);
+  const [customerNameError, setCustomerNameError]           = useState("");
+
+  useEffect(() => { setCorrectingCustomerName(false); setCustomerNameError(""); }, [recordId]);
+
+  const openCorrectCustomerName = () => {
+    setCustomerNameInput(detail?.extraction.extracted_customer || "");
+    setCustomerNameError("");
+    setCorrectingCustomerName(true);
+  };
+
+  const handleCorrectCustomerName = async () => {
+    const trimmed = customerNameInput.trim();
+    if (!trimmed) { setCustomerNameError("Customer name cannot be blank."); return; }
+    setCustomerNameLoading(true);
+    setCustomerNameError("");
+    try {
+      await correctCustomerName(recordId, trimmed);
+      setCorrectingCustomerName(false);
+      await fetchDetail();
+    } catch (e: any) {
+      setCustomerNameError(formatApiError(e, "Could not correct customer name."));
+    }
+    setCustomerNameLoading(false);
   };
 
   // Dispatches a code from `available_actions` (server-computed -- see
@@ -578,11 +633,58 @@ export default function RowDetailPage() {
 
                 {/* Customer side */}
                 <div className="px-5 py-4">
-                  <div className="flex items-center gap-1.5 mb-3">
-                    <User size={10} className="text-gray-400" />
-                    <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Customer</span>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-1.5">
+                      <User size={10} className="text-gray-400" />
+                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-wider">Customer</span>
+                    </div>
+                    {canCorrectCustomerName && !correctingCustomerName && (
+                      <button
+                        onClick={openCorrectCustomerName}
+                        className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-gray-400 hover:text-primary cursor-pointer px-1.5 py-0.5 rounded-xs"
+                      >
+                        <Pencil size={9} /> {ex.extracted_customer ? "Correct" : "Add"}
+                      </button>
+                    )}
                   </div>
-                  {ex.extracted_customer ? (
+
+                  {correctingCustomerName ? (
+                    <div className="space-y-2">
+                      <input
+                        autoFocus
+                        type="text"
+                        value={customerNameInput}
+                        onChange={(e) => setCustomerNameInput(e.target.value)}
+                        placeholder="Correct customer name…"
+                        className="w-full bg-white border border-gray-300 rounded-sm text-xs font-semibold text-primary px-2.5 py-2 outline-none focus:border-[#222222]"
+                        onKeyDown={(e) => { if (e.key === "Enter") handleCorrectCustomerName(); }}
+                      />
+                      <p className="text-[10px] text-gray-400">
+                        Re-runs matching against this name — the row may move to a different
+                        category (e.g. Ready for Oracle, or a different exception) once saved.
+                      </p>
+                      {customerNameError && (
+                        <p className="text-[11px] font-semibold text-red-600">{customerNameError}</p>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleCorrectCustomerName}
+                          disabled={customerNameLoading || !customerNameInput.trim()}
+                          className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider bg-[#222222] hover:bg-black text-white px-3 py-1.5 rounded-sm cursor-pointer disabled:opacity-50"
+                        >
+                          {customerNameLoading && <Loader2 size={11} className="animate-spin" />}
+                          {customerNameLoading ? "Saving…" : "Save & Re-evaluate"}
+                        </button>
+                        <button
+                          onClick={() => { setCorrectingCustomerName(false); setCustomerNameError(""); }}
+                          disabled={customerNameLoading}
+                          className="text-[10px] font-black uppercase tracking-wider text-gray-500 hover:text-primary px-2 py-1.5 rounded-sm cursor-pointer disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : ex.extracted_customer ? (
                     <>
                       <div className="text-[15px] font-black text-[#222222] mb-2.5 leading-snug">{ex.extracted_customer}</div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -592,6 +694,19 @@ export default function RowDetailPage() {
                         {ex.confidence_score != null && (
                           <span className={`text-[9px] font-black px-2 py-1 rounded-xs text-white ${ex.confidence_score >= 0.8 ? "bg-emerald-600" : "bg-amber-500"}`}>
                             {(ex.confidence_score * 100).toFixed(0)}% confidence
+                          </span>
+                        )}
+                        {ex.customer_name_corrected && (
+                          <span
+                            className="text-[9px] font-black bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-xs uppercase tracking-wider"
+                            title={
+                              ex.customer_name_corrected_by
+                                ? `Corrected by ${ex.customer_name_corrected_by}${ex.customer_name_corrected_at ? ` on ${fmtDate(ex.customer_name_corrected_at)}` : ""}`
+                                : "Corrected by a SPOC"
+                            }
+                          >
+                            <Pencil size={9} className="inline mr-1 -mt-0.5" />
+                            Corrected{ex.ai_extracted_customer_name ? ` from "${ex.ai_extracted_customer_name}"` : ""}
                           </span>
                         )}
                       </div>

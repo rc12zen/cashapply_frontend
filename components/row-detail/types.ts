@@ -97,6 +97,15 @@ export interface RowDetail {
     all_invoice_numbers: string[];
     row_type:            string | null;
     is_matched:          boolean;
+    // PATCH: if a SPOC has corrected the AI's own customer guess (see
+    // rule_engine/customer_name_correction.py), extracted_customer above
+    // already reflects the CORRECTED value -- these fields let the UI
+    // show that a correction happened at all, and what the AI originally
+    // said before it.
+    customer_name_corrected?:    boolean;
+    ai_extracted_customer_name?: string | null;
+    customer_name_corrected_by?: string | null;
+    customer_name_corrected_at?: string | null;
   };
   confirmed_invoices: ConfirmedInvoice[];
   sum_outstanding:    number;
@@ -236,4 +245,3 @@ export function fmtDate(s: string | null | undefined) {
   try { return new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
   catch { return s; }
 }
-

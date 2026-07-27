@@ -384,6 +384,12 @@ export const retryOracleBulkForRun = (runId: number) => API.post(`/api/hitl/retr
 // remittances persisted since it landed in needs_remittance, instead of
 // waiting for the next scheduled sweep (REMITTANCE_RECHECK_INTERVAL_SECONDS).
 export const recheckRemittance  = (id: number)                   => API.post(`/api/hitl/${id}/recheck-remittance`);
+// Correct a wrongly AI-identified customer name and re-run matching --
+// see rule_engine/customer_name_correction.py. Backend refuses (returns a
+// real error) if this row has already been approved/rejected/manually
+// mapped -- see that module's _is_correctable().
+export const correctCustomerName = (id: number, customerName: string) =>
+	API.post(`/api/hitl/${id}/correct-customer-name`, { customer_name: customerName });
 
 // ── Manual invoice mapping ───────────────────────────────────────────────────
 // For rows that didn't land in ready_for_oracle automatically. Confirming
