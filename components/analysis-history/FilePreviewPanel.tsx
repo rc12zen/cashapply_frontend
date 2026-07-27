@@ -9,21 +9,22 @@
  * history list / run-detail orchestration, not this self-contained
  * preview widget.
  */
-import { FileText, Layers, Loader2, Search } from "lucide-react";
+import { Download, FileText, Layers, Loader2, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { getAgingPreview, getFilePreview } from "@/lib/api";
+import { downloadAgingReport, getAgingPreview, getFilePreview } from "@/lib/api";
 
 type PreviewSource = "statement" | "aging";
 
-function PreviewTable({ preview, filter, onFilterChange }: {
+function PreviewTable({ preview, filter, onFilterChange, onDownload }: {
   preview: any;
   filter: string;
   onFilterChange: (v: string) => void;
+  onDownload?: () => void;
 }) {
   const filteredRows = useMemo(() => {
     if (!preview || !filter) return preview?.rows ?? [];
     const q = filter.toLowerCase();
-    return preview.rows.filter((row: string[]) => row.some((cell) => cell.toLowerCase().includes(q)));
+    return preview.rows.filter((row: string[]) => row.some((cell) => String(cell ?? "").toLowerCase().includes(q)));
   }, [preview, filter]);
 
   if (!preview) return (
@@ -39,6 +40,12 @@ function PreviewTable({ preview, filter, onFilterChange }: {
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[10px] font-black text-primary uppercase tracking-wider truncate">{preview.filename}</span>
           <span className="text-[10px] text-gray-400 font-mono shrink-0">{preview.total_rows} rows · {preview.columns.length} cols</span>
+          {onDownload && (
+            <button onClick={onDownload} title="Download original file"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-xs border border-gray-300 bg-white text-gray-600 hover:border-[#222222] hover:text-[#222222] shrink-0 cursor-pointer">
+              <Download size={10} />
+            </button>
+          )}
         </div>
         <div className="relative shrink-0">
           <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -117,6 +124,14 @@ export default function FilePreviewPanel({ statementFiles = [], bucket = "active
   const isLoading = source === "statement" ? stmtLoading : agingLoading;
   const preview   = source === "statement" ? stmtPreview  : agingPreview;
 
+  const downloadAging = async () => {
+    const res = await downloadAgingReport();
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url; a.download = agingPreview?.filename || "aging_report.xlsx"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
 
@@ -166,7 +181,8 @@ export default function FilePreviewPanel({ statementFiles = [], bucket = "active
           </span>
         </div>
       ) : (
-        <PreviewTable preview={preview} filter={filter} onFilterChange={setFilter} />
+        <PreviewTable preview={preview} filter={filter} onFilterChange={setFilter}
+          onDownload={source === "aging" ? downloadAging : undefined} />
       )}
     </div>
   );
