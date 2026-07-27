@@ -22,9 +22,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom";
 import { getBuilderRawPreview, locateAccount, saveRecipe, testBuilderDraft, getAvailableOUs } from "@/lib/configBuilderApi";
 import { getErrorMessage } from "@/lib/errorMessage";
+import { validateFieldSamples, accountReasonForSamples, accountRejectReason } from "@/lib/configBuilderValidation";
 import type {
   AccountLocator, BuilderTestResult, CreditRuleConfig, ExclusionRule,
-  FieldSource, LogicalField, MergeRule, RawPreviewData,
+  FieldSource, FieldWarning, LogicalField, MergeRule, RawPreviewData,
 } from "@/lib/configBuilderTypes";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -53,6 +54,33 @@ function fieldSatisfied(field: { noneAllowed?: boolean }, src: FieldSource): boo
   if (src.type === "concat") return (src.names?.length ?? 0) > 0;
   if (src.type === "none")   return field.noneAllowed === true;
   return false;
+}
+
+// Representative sample VALUES for a field's source — up to `max` real data
+// values for a column (skipping the header AND any sub-header row, so a
+// sub-header label like "Cr" is never mistaken for data), the cell text for a
+// cell, the literal for fixed. Feeds the live value-sanity checks, which are
+// majority-based so one odd value can't trigger a false warning.
+function fieldSampleValues(
+  src: FieldSource, columns: string[], rows: string[][],
+  headerRow: number, subHeaderRow: number | null, max = 8,
+): string[] {
+  if (!src) return [];
+  if (src.type === "fixed") { const v = (src.value ?? "").trim(); return v ? [v] : []; }
+  if (src.type === "cell")  { const v = String(rows[src.row ?? 0]?.[src.col ?? 0] ?? "").trim(); return v ? [v] : []; }
+  if (src.type === "column") {
+    if (!src.name) return [];
+    const idx = columns.indexOf(src.name);
+    if (idx < 0) return [];
+    const dataStart = (subHeaderRow != null ? Math.max(headerRow, subHeaderRow) : headerRow) + 1;
+    const out: string[] = [];
+    for (let ri = dataStart; ri < rows.length && out.length < max; ri++) {
+      const v = String(rows[ri]?.[idx] ?? "").trim();
+      if (v) out.push(v);
+    }
+    return out;
+  }
+  return [];   // concat / none — no single representative sample to judge
 }
 
 // Strong, general account-number matcher for the regex locator. Captures any
@@ -152,6 +180,11 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   // ── Step 7: Test ─────────────────────────────────────────────────────────────
   const [testResult, setTestResult]     = useState<BuilderTestResult | null>(null);
   const [testLoading, setTestLoading]   = useState(false);
+
+  // SPOC override of the account-number structural gate ("I confirm this is the
+  // real account number"). Only unblocks when there's an actual account issue;
+  // passed to the backend at save.
+  const [overrideAccount, setOverrideAccount] = useState(false);
 
   // ── Step 7: Save ──────────────────────────────────────────────────────────────
   const [displayName, setDisplayName]     = useState("");
@@ -345,6 +378,9 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const handleSave = async () => {
     if (!displayName.trim()) { setSaveError("Bank / Statement name is required."); return; }
     if (!accountNumber.trim()) { setSaveError("Locate and confirm an account number first (step 5)."); return; }
+    // Hard account gate (unless overridden) — refuse to save a label/invalid
+    // value as the identity, the exact thing that corrupted configs.
+    if (accountIdentityReason && !overrideAccount) { setSaveError(accountIdentityReason); return; }
     if (!bank.trim() || !currency.trim()) { setSaveError("Bank and Currency are required."); return; }
     if (!ouNumber.trim() || !businessUnit.trim()) { setSaveError("OU Number and Business Unit are required."); return; }
     setSaving(true);
@@ -363,6 +399,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         ou_number: ouNumber.trim(),
         business_unit: businessUnit.trim(),
         functional_currency: functionalCurrency.trim() || undefined,
+        override_account_validation: overrideAccount,
         created_by: readLoginStub(),
       });
       onSaved(accountNumber.trim());
@@ -410,6 +447,31 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
 
   // ── Internal test: structural checks that must hold before the user test ───────
   // (Q: "structure + account only" — we do NOT require credit rows > 0.)
+  // ── Account-number structural checks (the config-corruption guard) ─────────────
+  // The columns-tab account field value (catches a metadata/label cell mapped as
+  // the account) and the saved identity value (Step 5). accountRejectReason
+  // returns a message or null. The user can override both with the checkbox.
+  const accountFieldReason = accountReasonForSamples(
+    fieldSampleValues(fieldMappings.account_number, columns, activeRows, headerRow ?? 0, subHeaderRow)
+  );
+  const accountIdentityReason = accountNumber.trim() ? accountRejectReason(accountNumber.trim()) : null;
+  // The backend Test inspects EVERY parsed account value; account_ok === false is
+  // authoritative. Missing (older backend) = treat as ok.
+  const backendAccountOk = testResult?.account_ok !== false;
+  const accountValueOk = (!accountFieldReason && !accountIdentityReason && backendAccountOk) || overrideAccount;
+
+  // The account issue relevant to the step the user is currently on — drives the
+  // blocking banner + override checkbox shown above the nav.
+  const activeAccountIssue: string | null =
+    step === 3 ? accountFieldReason
+    : step === 5 ? accountIdentityReason
+    : step === 6 ? (testResult?.account_ok === false
+        ? (testResult.warnings?.find((w) => w.field === "account_number" && w.severity === "error")?.message
+            ?? "The account number extracted from the file doesn't look valid.")
+        : accountIdentityReason)
+    : step === 7 ? accountIdentityReason
+    : null;
+
   const internalChecks = useCallback((): { label: string; ok: boolean }[] => {
     const requiredMapped = LOGICAL_FIELDS.filter((f) => f.required).every((f) =>
       fieldSatisfied(f, fieldMappings[f.name]));
@@ -418,12 +480,14 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       { label: "All required columns are mapped",  ok: requiredMapped },
       { label: "Credit rule column selected",      ok: !!creditRule.field },
       { label: "Account number identified",        ok: !!accountNumber.trim() },
+      { label: "Account number is valid",          ok: accountValueOk },
     ];
-  }, [fieldMappings, creditRule, accountNumber, headerRow]);
+  }, [fieldMappings, creditRule, accountNumber, headerRow, accountValueOk]);
 
   const internalPass = internalChecks().every((c) => c.ok);
   // The draft must pass BOTH the internal checks and the live parse (user test)
-  // before the user can advance to Save.
+  // before the user can advance to Save. A bad account value blocks here even
+  // when the parse itself succeeded — the "passed the test but was wrong" hole.
   const testPassed = internalPass && testResult?.success === true;
 
   // Any edit that changes the recipe invalidates a prior passing test — force a re-run.
@@ -435,13 +499,18 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const canProceed = (): boolean => {
     if (step === 2) return headerRow !== null;
     if (step === 3) {
-      return LOGICAL_FIELDS.filter((f) => f.required).every((f) =>
+      const requiredMapped = LOGICAL_FIELDS.filter((f) => f.required).every((f) =>
         fieldSatisfied(f, fieldMappings[f.name]));
+      // Block a label-cell/invalid account value unless the user explicitly overrode.
+      return requiredMapped && (!accountFieldReason || overrideAccount);
     }
     if (step === 4) return !!creditRule.field;
-    if (step === 5) return !!accountNumber.trim();     // Account step
+    if (step === 5) return !!accountNumber.trim() && (!accountIdentityReason || overrideAccount);  // Account step
     if (step === 6) return testPassed;                 // Test step — must pass internal + user test
-    if (step === 7) return !!displayName.trim() && !!ouNumber.trim() && !!businessUnit.trim();
+    if (step === 7) {
+      const base = !!displayName.trim() && !!ouNumber.trim() && !!businessUnit.trim();
+      return base && (!accountIdentityReason || overrideAccount);
+    }
     return true;
   };
 
@@ -584,7 +653,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
               {step === 3 && (
                 <StepColumns {...{
                   columns, fieldMappings, setFieldMappings,
-                  activeRows, headerRow,
+                  activeRows, headerRow, subHeaderRow,
                 }} />
               )}
               {step === 4 && (
@@ -619,6 +688,30 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
             </>
           )}
         </div>
+
+        {/* ── Account-number gate — blocks Next/Save unless overridden ── */}
+        {activeAccountIssue && (
+          <div className="border-t border-red-200 bg-red-50 px-6 py-3 shrink-0">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={15} className="text-red-600 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[12px] font-bold text-red-800">Account number check failed</p>
+                <p className="text-[11px] text-red-700 mt-0.5">{activeAccountIssue}</p>
+                <label className="mt-2 flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={overrideAccount}
+                    onChange={(e) => setOverrideAccount(e.target.checked)}
+                    className="cursor-pointer"
+                  />
+                  <span className="text-[11px] font-semibold text-red-800">
+                    I confirm this is the real account number
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Navigation ── */}
         <div className="border-t border-gray-200 px-6 py-3 flex items-center justify-between shrink-0 bg-white">
@@ -887,6 +980,7 @@ interface ColumnMapperProps {
   setFieldMappings: (m: Record<LogicalField, FieldSource>) => void;
   activeRows: string[][];
   headerRow: number | null;
+  subHeaderRow: number | null;
 }
 
 // Per-field colour + short label for the click-to-map grid. Full static class
@@ -1027,7 +1121,7 @@ function StepColumns(props: ColumnMapperProps) {
 // Arm a field on the left, pick its source mode (Column / Cell / Combine / Fixed
 // / Not in file), then click in the grid. Column & Combine pick from the header
 // row; Cell picks any single cell (incl. metadata above the header).
-function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeRows, headerRow }: ColumnMapperProps) {
+function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeRows, headerRow, subHeaderRow }: ColumnMapperProps) {
   const hRow = headerRow ?? 0;
   const [armed, setArmed] = useState<LogicalField>(LOGICAL_FIELDS[0].name);
   const armedSrc = fieldMappings[armed];
@@ -1050,23 +1144,27 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
     return field ? fieldSatisfied(field, fieldMappings[name]) : false;
   };
 
-  // After a column assignment, jump to the next required field still unmapped.
+  // Advance to the NEXT field in order — UNCONDITIONALLY, so the user reviews
+  // every field including auto-detected ones. Previously this skipped any field
+  // that was already "mapped" (all auto-detected fields, plus cell-default
+  // fields which always count as satisfied), so focus jumped straight past a
+  // wrongly auto-detected field to the next empty one and the user never got
+  // prompted to check it. Stops at the last field (no wrap).
   const advanceFrom = (justSet: LogicalField) => {
     const order = LOGICAL_FIELDS.map((f) => f.name);
-    const reqd = new Set(LOGICAL_FIELDS.filter((f) => f.required).map((f) => f.name));
     const start = order.indexOf(justSet);
-    for (let k = 1; k < order.length; k++) {
-      const cand = order[(start + k) % order.length];
-      if (reqd.has(cand) && !isMapped(cand)) { setArmed(cand); return; }
-    }
+    if (start >= 0 && start < order.length - 1) setArmed(order[start + 1]);
   };
 
-  const sampleRow = activeRows[hRow + 1] ?? [];
-  const columnSample = (colName: string | null | undefined): string => {
-    if (!colName) return "";
-    const idx = columns.indexOf(colName);
-    return idx >= 0 ? (sampleRow[idx] ?? "") : "";
-  };
+  // Live value-sanity check for a field's current source (null = looks fine).
+  // Samples several real data rows (skipping the sub-header), majority-based.
+  const fieldWarning = (name: LogicalField): FieldWarning | null =>
+    validateFieldSamples(name, fieldSampleValues(fieldMappings[name], columns, activeRows, hRow, subHeaderRow));
+
+  // First real DATA value (after header + sub-header) for the sample display —
+  // not activeRows[hRow+1], which is the sub-header row in two-row-header files.
+  const columnSample = (colName: string | null | undefined): string =>
+    fieldSampleValues({ type: "column", name: colName ?? null }, columns, activeRows, hRow, subHeaderRow, 1)[0] ?? "";
 
   // Fields sitting on a header column (column-type name match or concat member).
   const fieldsOnColumn = (ci: number): LogicalField[] =>
@@ -1125,6 +1223,7 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
           const active = armed === name;
           const mapped = isMapped(name);
           const st = FIELD_STYLE[name];
+          const fw = fieldWarning(name);
           return (
             <div
               key={name}
@@ -1143,6 +1242,13 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
               <div className={`text-[10px] mt-1 font-mono truncate ${mapped ? "text-gray-600" : "text-gray-400 italic"}`}>
                 {summary(name)}
               </div>
+
+              {fw && (
+                <div className={`mt-1 flex items-start gap-1 text-[9px] font-semibold ${fw.severity === "error" ? "text-red-600" : "text-amber-600"}`}>
+                  <AlertTriangle size={10} className="shrink-0 mt-px" />
+                  <span className="leading-tight normal-case">{fw.message}</span>
+                </div>
+              )}
 
               {active && (
                 <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
@@ -1197,6 +1303,19 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
 
                   {mode === "cell" && (
                     <div className="text-[10px] text-gray-500 italic">Click any cell in the grid →</div>
+                  )}
+
+                  {/* Step through fields one at a time so every field — including
+                      auto-detected ones — gets reviewed. Accepts the current
+                      field as-is and moves to the next. */}
+                  {LOGICAL_FIELDS.findIndex((f) => f.name === name) < LOGICAL_FIELDS.length - 1 && (
+                    <button
+                      type="button"
+                      onClick={() => advanceFrom(name)}
+                      className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-gray-500 hover:text-[#222222] cursor-pointer"
+                    >
+                      Next field <ChevronRight size={11} />
+                    </button>
                   )}
                 </div>
               )}
@@ -1256,7 +1375,7 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
 }
 
 // ── Dropdown mode: the original per-field source pickers (fallback) ────────────
-function DropdownColumnMapper({ columns, fieldMappings, setFieldMappings, activeRows, headerRow }: ColumnMapperProps) {
+function DropdownColumnMapper({ columns, fieldMappings, setFieldMappings, activeRows, headerRow, subHeaderRow }: ColumnMapperProps) {
   const updateField = (name: LogicalField, src: FieldSource) =>
     setFieldMappings({ ...fieldMappings, [name]: src });
 
@@ -1271,13 +1390,10 @@ function DropdownColumnMapper({ columns, fieldMappings, setFieldMappings, active
     });
   };
 
-  // First data row after the header → live sample values for the chosen column.
-  const sampleRow = activeRows[(headerRow ?? 0) + 1] ?? [];
-  const sampleFor = (colName: string | null | undefined): string => {
-    if (!colName) return "";
-    const idx = columns.indexOf(colName);
-    return idx >= 0 ? (sampleRow[idx] ?? "") : "";
-  };
+  // First real DATA value (after header + sub-header) for the chosen column —
+  // skips a sub-header row so a label like "Cr" isn't shown as the sample.
+  const sampleFor = (colName: string | null | undefined): string =>
+    fieldSampleValues({ type: "column", name: colName ?? null }, columns, activeRows, headerRow ?? 0, subHeaderRow, 1)[0] ?? "";
 
   const SOURCE_TYPE_LABELS: Record<string, string> = {
     column: "A column in the file",
@@ -1826,6 +1942,30 @@ function StepTestRun({
                 Found {testResult.row_count.toLocaleString()} credit row{testResult.row_count !== 1 ? "s" : ""}
                 {testResult.row_count > 50 && " (showing first 50)"}
               </div>
+
+              {/* Value-level sanity findings over the parsed rows. account_number
+                  errors block Save (handled by the override banner above the nav);
+                  the rest are advisory warnings. */}
+              {(testResult.warnings?.length ?? 0) > 0 && (
+                <div className="space-y-1.5">
+                  {testResult.warnings!.map((w, i) => (
+                    <div
+                      key={i}
+                      className={`flex items-start gap-2 text-[11px] px-3 py-2 rounded border ${
+                        w.severity === "error"
+                          ? "bg-red-50 border-red-200 text-red-700"
+                          : "bg-amber-50 border-amber-200 text-amber-800"
+                      }`}
+                    >
+                      <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                      <span>
+                        <span className="font-bold uppercase tracking-wide mr-1">{w.field.replace(/_/g, " ")}:</span>
+                        {w.message}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {testResult.rows.length > 0 && (
                 <div className="border border-gray-200 rounded overflow-auto max-h-72">
