@@ -82,8 +82,8 @@ export const updateUser = (id: number, payload: { display_name?: string; role_na
 export const setUserActive = (id: number, is_active: boolean) =>
 	API.put(`/api/admin/users/${id}/active`, { is_active });
 
-// ── Bank Accounts (nav info page; gated on "run:view" to view, ─────────────────
-// "config:manage" to edit -- see bff/bank_accounts_routes.py) ──────────────────
+// ── Accounts & OU's (nav info page; gated on "run:view" to view, ──────────────
+// "ou:manage" to edit -- see bff/bank_accounts_routes.py) ──────────────────────
 export const getBankAccounts = () => API.get("/api/bank-accounts");
 export const getBusinessUnitOptions = () => API.get("/api/bank-accounts/business-units");
 // Changing an account's Business Unit(s) only affects analysis runs started
@@ -93,6 +93,15 @@ export const updateBankAccountBusinessUnits = (
 	id: number,
 	payload: { primary_ou_number: string; additional_ou_numbers?: string[] },
 ) => API.put(`/api/bank-accounts/${id}/business-units`, payload);
+// Edit an OrganizationUnit's own name/currency directly -- new endpoint.
+// Get this exactly right: Oracle Fusion matches the "BusinessUnit" field
+// (built as `${ou_name}(${ou_number})`, e.g. "PUNE(111)") as an EXACT
+// string -- any case/spelling difference 404s every receipt for that OU,
+// with no fuzzy fallback.
+export const updateOrganizationUnit = (
+	ouNumber: string,
+	payload: { ou_name: string; functional_currency: string },
+) => API.put(`/api/bank-accounts/business-units/${encodeURIComponent(ouNumber)}`, payload);
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 export const getFiles        = ()                         => API.get("/api/run/files");
@@ -358,6 +367,18 @@ export const rejectEntry        = (id: number, comment?: string) => API.post(`/a
 export const approveBulk        = (ids: number[])                => API.post("/api/hitl/approve-bulk", { ids });
 export const getHitlHistory     = ()                             => API.get("/api/hitl/history");
 export const retryOracle        = (id: number)                   => API.post(`/api/hitl/retry-oracle/${id}`);
+// Read-only — tells the frontend whether retryOracleBulkForRun() would
+// actually be allowed to run for this run_id right now (every receipt in
+// the run currently failed), WITHOUT retrying anything. Used to decide
+// whether to even show the "Retry All Failed Receipts" button.
+export const getRetryEligibilityForRun = (runId: number) =>
+	API.get(`/api/hitl/retry-oracle-bulk-for-run/${runId}/eligibility`);
+// Bulk-retries RECEIPT CREATION for every row in a run -- backend enforces
+// (does not just suggest) that this only proceeds when EVERY receipt in
+// the run currently shows failed; a mixed run is rejected with a clear
+// error rather than partially retried (see hitl/service.py's
+// retry_receipt_creation_bulk_for_run() for the exact rule).
+export const retryOracleBulkForRun = (runId: number) => API.post(`/api/hitl/retry-oracle-bulk-for-run/${runId}`);
 // Manual counterpart to the periodic remittance_recheck_worker (see
 // rule_engine/remittance_recheck.py) — re-checks THIS row against
 // remittances persisted since it landed in needs_remittance, instead of

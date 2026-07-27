@@ -3,7 +3,9 @@
  * components/bank-accounts/BusinessUnitPicker.tsx
  * ===================================================
  * Primary Business Unit (single select) + Additional Business Units
- * (multi-select checkboxes) picker, used when an Administrator changes
+ * (multi-select checkboxes) picker, used when someone holding the
+ * `ou:manage` permission (Administrator, Analyst, or Oracle Operator --
+ * see scripts/seed_rbac.py) changes
  * which Business Unit(s) a bank account belongs to. Mirrors
  * components/users/RoleMultiSelect.tsx's interaction pattern.
  */

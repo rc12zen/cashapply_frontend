@@ -83,6 +83,12 @@ export function derivePermissionFlags(permissions: string[] | undefined | null) 
     canDownloadFiles: hasPermission(permissions, "file:download"),
     canViewActivityLog: hasPermission(permissions, "activity_log:view"),
     canManageUsers: hasPermission(permissions, "user:manage"),
+    // ou:manage — Accounts & OU's page writes: edit a bank account's
+    // Business Unit mapping AND edit an OrganizationUnit's own name/
+    // functional currency directly. Split out from config:author so
+    // Oracle Operator can hold it too (see scripts/seed_rbac.py) without
+    // also getting Config Builder recipe-authoring access.
+    canManageOU: hasPermission(permissions, "ou:manage"),
     // config:manage is now Admin-only: aging upload/select/refresh/remove
     // and deleting a bank-format recipe. General config authoring (save
     // recipe, edit abbreviations, edit BU mapping, Config Builder) is

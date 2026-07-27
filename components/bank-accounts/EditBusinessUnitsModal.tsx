@@ -2,7 +2,9 @@
 /**
  * components/bank-accounts/EditBusinessUnitsModal.tsx
  * =======================================================
- * Administrator-only: change which Business Unit(s) a bank account
+ * Gated on the `ou:manage` permission (Administrator, Analyst, or Oracle
+ * Operator -- see scripts/seed_rbac.py): change which Business Unit(s) a
+ * bank account
  * belongs to. Most accounts have exactly one (the "Primary Business
  * Unit"); some legitimately receive payments for more than one, hence
  * the separate "Additional Business Units" multi-select.

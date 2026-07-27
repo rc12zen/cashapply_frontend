@@ -69,7 +69,9 @@ import {
 } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { usePageGuard } from "@/lib/usePageGuard";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 import PageAccessDenied from "@/components/PageAccessDenied";
+import RetryAllFailedReceiptsBanner from "@/components/RetryAllFailedReceiptsBanner";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -222,6 +224,11 @@ export default function AnalysisHistoryPage() {
 
 function AnalysisHistoryPageInner() {
   const { allowed, checking } = usePageGuard("run:view");
+  // Gates RetryAllFailedReceiptsBanner below -- same oracle:post permission
+  // that gates Approve/individual Retry (see the per-row canApprove further
+  // down, which is a DIFFERENT, per-line-item eligibility check -- this one
+  // is the permission flag).
+  const { flags } = useCurrentUser();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [viewingRun, setViewingRun] = useState<AnalysisRun | null>(null);
@@ -669,6 +676,13 @@ function AnalysisHistoryPageInner() {
                 <Download size={13}/> Download CSV
               </button>
             </div>
+
+            {/* Retry-all-failed-receipts — scoped to THIS specific run, not
+                just "whatever run just finished". Someone commonly fixes an
+                OU/Business Unit detail well after the run that failed is no
+                longer the most recent one, so this needs to work from any
+                past run's detail view, not just right after it completes. */}
+            <RetryAllFailedReceiptsBanner runId={viewingRun.run_id} canRetry={flags.canApprove} />
 
             {/* Metric cards — 7 cards matching the backend's 7 real groups */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-shrink-0">

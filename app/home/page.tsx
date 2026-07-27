@@ -37,6 +37,7 @@ import StatusBanners from "./components/StatusBanners";
 import AgingReportCard from "./components/AgingReportCard";
 import AccountStatementsCard from "./components/AccountStatementsCard";
 import RunControlBar from "./components/RunControlBar";
+import ConfirmRunDialog from "./components/ConfirmRunDialog";
 
 import {
   type ConfigCandidate, type FileInfo, type AccountGroup, isAccountRunnable,
@@ -125,6 +126,12 @@ export default function Dashboard() {
   // the exact same statement(s) — see filesAlreadyAnalyzed below.
   const [lastRunFiles, setLastRunFiles] = useState<string[]>([]);
   const [lastRunId, setLastRunId] = useState<number | null>(null);
+  // Confirm-before-run: populated by handleStart() once validation passes,
+  // so the person sees exactly which accounts/OUs/Business Units this run
+  // will process BEFORE it actually starts -- see ConfirmRunDialog. The
+  // real POST /run/start only fires from confirmAndStartRun(), never
+  // directly from handleStart().
+  const [confirmRun, setConfirmRun] = useState<{ groups: AccountGroup[]; filenames: string[] } | null>(null);
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -456,13 +463,25 @@ export default function Dashboard() {
     }
     const selectedFilenames = runnableSelected.flatMap((g) => g.files.map((f) => f.filename));
     setError("");
+    // PATCH: no longer starts the run directly here — opens the confirm
+    // dialog instead (see ConfirmRunDialog), showing exactly which
+    // accounts/OUs/Business Units this run will process. The actual
+    // POST /run/start only happens from confirmAndStartRun() below, once
+    // the person explicitly confirms.
+    setConfirmRun({ groups: runnableSelected, filenames: selectedFilenames });
+  };
+
+  const confirmAndStartRun = async () => {
+    if (!confirmRun) return;
     setRunCompletionSummary(null);
     setLoading(true);
     try {
-      await startRun(selectedFilenames);
+      await startRun(confirmRun.filenames);
       prevRunStatus.current = "running";
+      setConfirmRun(null);
       fetchStatus();
     } catch (e: any) {
+      setConfirmRun(null);
       setError(getErrorMessage(e, "Failed to start analysis"));
     }
     setLoading(false);
@@ -685,6 +704,14 @@ export default function Dashboard() {
 					configNeededNotice={configNeededNotice} setConfigNeededNotice={setConfigNeededNotice}
 					uploadNotice={uploadNotice} setUploadNotice={setUploadNotice}
 				/>
+				{/* PATCH: Retry-all-failed-receipts moved to the Analysis History
+				    run-detail view (app/analysis-history/page.tsx) instead of living
+				    here too. lastRunId only ever reflects the most recent run THIS
+				    browser session happened to see -- someone typically fixes an
+				    OU/Business Unit detail well after they've navigated away from
+				    Home, so a durable, always-reachable-by-run_id location (any past
+				    run, any time) is the right one, not a second copy tied to
+				    whatever's freshest in this tab's memory. */}
 
 				{/* UPLOADS */}
 				<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -725,6 +752,16 @@ export default function Dashboard() {
 					fmtElapsed={fmtElapsed}
 					onStart={handleStart}
 				/>
+
+				{/* Confirm-before-run dialog */}
+				{confirmRun && (
+					<ConfirmRunDialog
+						groups={confirmRun.groups}
+						loading={loading}
+						onCancel={() => setConfirmRun(null)}
+						onConfirm={confirmAndStartRun}
+					/>
+				)}
 
 				{/* Config Resolve Dialog */}
 				{resolveState && (

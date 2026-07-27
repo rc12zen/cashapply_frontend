@@ -1,29 +1,46 @@
 "use client";
 /**
- * app/bank-accounts/page.tsx
- * =============================
- * Nav-bar info page: which Bank Accounts exist and which Business Unit(s)
- * they belong to. Viewable by every role with view access (same tier as
- * Config/Overview); editing a Business Unit assignment is Administrator-
- * only (config:manage) -- see bff/bank_accounts_routes.py.
+ * app/bank-accounts/page.tsx  (renamed: "Accounts & OU's")
+ * ============================================================
+ * Nav-bar info page: which Bank Accounts exist, which Business Unit(s)
+ * they belong to, AND the full roster of every Organization Unit (name +
+ * functional currency). Viewable by every role with view access (same
+ * tier as Config/Overview); editing is gated on the `ou:manage`
+ * permission (Administrator, Analyst, Oracle Operator — see
+ * bff/bank_accounts_routes.py and scripts/seed_rbac.py).
  *
- * IMPORTANT: changing a Business Unit here only affects analysis runs
- * started AFTER the change -- already-completed runs are never touched
- * (see EditBusinessUnitsModal's inline note, and the backend's module
- * docstring for exactly why that's true).
+ * PATCH: this page used to only show Business Units reachable THROUGH a
+ * bank account — an OU with no account attached yet (e.g. seen in the
+ * aging report but not yet onboarded) never appeared anywhere on this
+ * page. The new "Organization Units" table below lists every OU directly,
+ * and both edits (account -> BU mapping, and an OU's own name/currency)
+ * are permission-gated the same way now.
+ *
+ * IMPORTANT: changing a Business Unit mapping, or an OU's own name/
+ * currency, here only affects analysis runs started AFTER the change --
+ * already-completed runs are never touched (see EditBusinessUnitsModal's
+ * inline note, and the backend's module docstring for exactly why
+ * that's true). An OU name/currency fix IS picked up immediately by the
+ * next Oracle retry, though -- rule_engine/fx_service.py reads
+ * organization_units live, with no caching.
  */
-import { Landmark, Loader2, RefreshCw } from "lucide-react";
+import { Landmark, Loader2, RefreshCw, Building2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { getBankAccounts, getBusinessUnitOptions, updateBankAccountBusinessUnits } from "@/lib/api";
+import {
+  getBankAccounts, getBusinessUnitOptions,
+  updateBankAccountBusinessUnits, updateOrganizationUnit,
+} from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { usePageGuard } from "@/lib/usePageGuard";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import PageAccessDenied from "@/components/PageAccessDenied";
 import BankAccountsTable, { type BankAccountRow } from "@/components/bank-accounts/BankAccountsTable";
 import EditBusinessUnitsModal from "@/components/bank-accounts/EditBusinessUnitsModal";
+import OrganizationUnitsTable, { type OrganizationUnitRow } from "@/components/bank-accounts/OrganizationUnitsTable";
+import EditOrganizationUnitModal from "@/components/bank-accounts/EditOrganizationUnitModal";
 import type { BusinessUnitOption } from "@/components/bank-accounts/BusinessUnitPicker";
 
-export default function BankAccountsPage() {
+export default function AccountsAndOUsPage() {
   const { allowed, checking } = usePageGuard("run:view");
   const { flags } = useCurrentUser();
 
@@ -34,8 +51,12 @@ export default function BankAccountsPage() {
   const [success, setSuccess] = useState("");
 
   const [editingAccount, setEditingAccount] = useState<BankAccountRow | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [modalError, setModalError] = useState("");
+  const [savingAccount, setSavingAccount] = useState(false);
+  const [accountModalError, setAccountModalError] = useState("");
+
+  const [editingOU, setEditingOU] = useState<OrganizationUnitRow | null>(null);
+  const [savingOU, setSavingOU] = useState(false);
+  const [ouModalError, setOuModalError] = useState("");
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -45,7 +66,7 @@ export default function BankAccountsPage() {
       setAccounts(accountsRes.data.accounts ?? []);
       setBusinessUnits(buRes.data.business_units ?? []);
     } catch (e: any) {
-      setError(getErrorMessage(e, "Could not load bank accounts."));
+      setError(getErrorMessage(e, "Could not load accounts & OUs."));
     } finally {
       setLoading(false);
     }
@@ -57,8 +78,8 @@ export default function BankAccountsPage() {
 
   const handleSaveBusinessUnits = async (data: { primary_ou_number: string; additional_ou_numbers: string[] }) => {
     if (!editingAccount) return;
-    setSaving(true);
-    setModalError("");
+    setSavingAccount(true);
+    setAccountModalError("");
     try {
       await updateBankAccountBusinessUnits(editingAccount.id, data);
       setSuccess(`Updated Business Unit(s) for ${editingAccount.bank_name} — this applies to new analysis runs only.`);
@@ -66,25 +87,56 @@ export default function BankAccountsPage() {
       setEditingAccount(null);
       fetchAll();
     } catch (e: any) {
-      setModalError(getErrorMessage(e, "Could not update Business Unit(s)."));
+      setAccountModalError(getErrorMessage(e, "Could not update Business Unit(s)."));
     } finally {
-      setSaving(false);
+      setSavingAccount(false);
+    }
+  };
+
+  const handleSaveOU = async (data: { ou_name: string; functional_currency: string }) => {
+    if (!editingOU) return;
+    setSavingOU(true);
+    setOuModalError("");
+    try {
+      await updateOrganizationUnit(editingOU.ou_number, data);
+      setSuccess(
+        `Updated OU ${editingOU.ou_number} — Oracle will now receive "${data.ou_name}(${editingOU.ou_number})". ` +
+        `Picked up by the next analysis run / Oracle retry automatically.`
+      );
+      setTimeout(() => setSuccess(""), 6000);
+      setEditingOU(null);
+      fetchAll();
+    } catch (e: any) {
+      setOuModalError(getErrorMessage(e, "Could not update this Organization Unit."));
+    } finally {
+      setSavingOU(false);
     }
   };
 
   if (checking) return null;
   if (!allowed) return <PageAccessDenied />;
 
+  // businessUnits (from /business-units) already carries `active` as
+  // always-true (the backend query filters active=True) -- reuse the same
+  // list for the OU roster table so we don't need a second fetch.
+  const organizationUnits: OrganizationUnitRow[] = businessUnits.map((bu) => ({
+    ou_number: bu.ou_number,
+    ou_name: bu.ou_name,
+    functional_currency: bu.functional_currency,
+    active: true,
+  }));
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="pb-2 border-b border-gray-200 flex items-end justify-between">
         <div>
           <h1 className="text-xl font-black text-primary uppercase tracking-wider flex items-center gap-2">
-            <Landmark size={18} /> Bank Accounts
+            <Landmark size={18} /> Accounts &amp; OU's
           </h1>
           <p className="text-xs text-gray-500 mt-0.5 font-medium">
-            Every onboarded bank account and the Business Unit(s) it belongs to.
-            {flags.isAdmin && " Administrators can reassign a Business Unit — changes apply to new analysis runs only."}
+            Every onboarded bank account, the Business Unit(s) it belongs to, and the full
+            Organization Unit roster.
+            {flags.canManageOU && " You can reassign a Business Unit or fix an OU's name/currency — changes apply to new analysis runs only."}
           </p>
         </div>
       </div>
@@ -95,10 +147,11 @@ export default function BankAccountsPage() {
         </div>
       )}
 
+      {/* ── Bank Accounts ─────────────────────────────────────────────── */}
       <div className="bg-white border border-gray-200 rounded-sm shadow-xs overflow-hidden">
         <div className="bg-gray-50 border-b border-gray-100 px-4 py-2.5 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <h2 className="text-xs font-black text-primary uppercase tracking-wider">Accounts</h2>
+            <h2 className="text-xs font-black text-primary uppercase tracking-wider">Bank Accounts</h2>
             {accounts.length > 0 && (
               <span className="text-[10px] font-bold text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded-xs">
                 {accounts.length}
@@ -132,8 +185,33 @@ export default function BankAccountsPage() {
         ) : (
           <BankAccountsTable
             accounts={accounts}
-            canEdit={flags.canAuthorConfig}
-            onEdit={(a) => { setEditingAccount(a); setModalError(""); }}
+            canEdit={flags.canManageOU}
+            onEdit={(a) => { setEditingAccount(a); setAccountModalError(""); }}
+          />
+        )}
+      </div>
+
+      {/* ── Organization Units ────────────────────────────────────────── */}
+      <div className="bg-white border border-gray-200 rounded-sm shadow-xs overflow-hidden">
+        <div className="bg-gray-50 border-b border-gray-100 px-4 py-2.5 flex items-center gap-2">
+          <Building2 size={13} className="text-gray-400" />
+          <h2 className="text-xs font-black text-primary uppercase tracking-wider">Organization Units</h2>
+          {organizationUnits.length > 0 && (
+            <span className="text-[10px] font-bold text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded-xs">
+              {organizationUnits.length}
+            </span>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-8 text-gray-400">
+            <Loader2 size={16} className="animate-spin mr-2" /> Loading…
+          </div>
+        ) : (
+          <OrganizationUnitsTable
+            organizationUnits={organizationUnits}
+            canEdit={flags.canManageOU}
+            onEdit={(ou) => { setEditingOU(ou); setOuModalError(""); }}
           />
         )}
       </div>
@@ -142,10 +220,20 @@ export default function BankAccountsPage() {
         <EditBusinessUnitsModal
           account={editingAccount}
           businessUnits={businessUnits}
-          saving={saving}
-          error={modalError}
+          saving={savingAccount}
+          error={accountModalError}
           onCancel={() => setEditingAccount(null)}
           onSubmit={handleSaveBusinessUnits}
+        />
+      )}
+
+      {editingOU && (
+        <EditOrganizationUnitModal
+          organizationUnit={editingOU}
+          saving={savingOU}
+          error={ouModalError}
+          onCancel={() => setEditingOU(null)}
+          onSubmit={handleSaveOU}
         />
       )}
     </div>
