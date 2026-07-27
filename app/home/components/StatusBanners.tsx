@@ -7,6 +7,10 @@ export interface DuplicateUploadInfo {
   uploaded_at: string | null;
   history_link: string;
   existing_run_id: number | null;
+  // Per-user gating: true if the current viewer is the file's owner (it's in
+  // THEIR Account Statements list), false if someone else owns it (it is NOT
+  // in the viewer's list, so "select it below and Start" would be misleading).
+  owned_by_current_user: boolean;
 }
 
 export interface RunCompletionSummary {
@@ -116,11 +120,17 @@ export default function StatusBanners({
                 <a href={duplicateUploadInfo.history_link} className="underline font-bold text-amber-700 hover:text-amber-900">
                   View existing run →
                 </a>
-              ) : (
+              ) : duplicateUploadInfo.owned_by_current_user ? (
                 <>
                   This file hasn't been analyzed yet — no run exists for it. It's still sitting
                   in your Account Statements list below; select it and click{" "}
                   <span className="font-bold">Start Analysis</span> to process it.
+                </>
+              ) : (
+                <>
+                  This file hasn't been analyzed yet — no run exists for it. It's in{" "}
+                  <span className="font-bold">{duplicateUploadInfo.uploaded_by}</span>'s Account
+                  Statements list, not yours, so it won't appear below.
                 </>
               )}
             </span>
