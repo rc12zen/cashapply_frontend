@@ -88,6 +88,7 @@ export default function Dashboard() {
   const [duplicateUploadInfo, setDuplicateUploadInfo] = useState<{
     filename: string; uploaded_by: string; uploaded_at: string | null;
     history_link: string; existing_run_id: number | null;
+    owned_by_current_user: boolean;
   } | null>(null);
 
   // Detection results per file + wizard/resolve state
@@ -477,7 +478,7 @@ export default function Dashboard() {
       attempts += 1;
       try {
         const res = await getIngestStatus(sourceFileId);
-        const { ingest_status, new_row_count, duplicate_row_count, ingest_error } = res.data ?? {};
+        const { ingest_status, new_row_count, duplicate_row_count, ingest_error, pending_row_count } = res.data ?? {};
         setFiles((prev) =>
           prev.map((f) =>
             f.filename === filename
@@ -487,8 +488,18 @@ export default function Dashboard() {
         );
         if (ingest_status === "ready") {
           clearInterval(interval);
-          const dupNote = duplicate_row_count ? ` (${duplicate_row_count} duplicate row(s) skipped)` : "";
-          showSuccess(`"${filename}" is ready — ${new_row_count ?? 0} new row(s) ingested${dupNote}.`);
+          // Two independent facts, stated plainly so "0 new rows" is never read
+          // as "nothing to do":
+          //   1. what ingestion did — added new rows, or found them all already
+          //      present (a re-upload of a file whose rows were ingested before);
+          //   2. whether it can be run now — keyed off pending rows, NOT new rows.
+          const added = (new_row_count ?? 0) > 0
+            ? `${new_row_count} new row(s) added`
+            : `no new rows (all ${duplicate_row_count ?? 0} already ingested)`;
+          const action = (pending_row_count ?? 0) > 0
+            ? "ready to analyze"
+            : "already analyzed — nothing new to run";
+          showSuccess(`"${filename}" is ready — ${added}; ${action}.`);
           // Re-fetch the authoritative file list too: ingestion sets the file's
           // bank_account_id (null until now), so without this the file stays in
           // the "unresolved"/Unknown group even though it's ready. fetchFiles
@@ -574,6 +585,7 @@ export default function Dashboard() {
           uploaded_at: data.uploaded_at,
           history_link: data.history_link,
           existing_run_id: data.existing_run_id ?? null,
+          owned_by_current_user: data.owned_by_current_user ?? false,
         });
         await fetchFiles();
         await fetchPendingByAccount();
