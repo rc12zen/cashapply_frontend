@@ -22,7 +22,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom";
 import { getBuilderRawPreview, locateAccount, saveRecipe, testBuilderDraft, getAvailableOUs } from "@/lib/configBuilderApi";
 import { getErrorMessage } from "@/lib/errorMessage";
-import { validateFieldSamples, accountReasonForSamples, accountRejectReason } from "@/lib/configBuilderValidation";
+import { validateFieldSamples, accountReasonForSamples, accountRejectReason, splitAccounts } from "@/lib/configBuilderValidation";
+import { ISO_4217, normalizeCurrency } from "@/lib/currency";
 import type {
   AccountLocator, BuilderTestResult, CreditRuleConfig, ExclusionRule,
   FieldSource, FieldWarning, LogicalField, MergeRule, RawPreviewData,
@@ -55,6 +56,28 @@ function fieldSatisfied(field: { noneAllowed?: boolean }, src: FieldSource): boo
   if (src.type === "none")   return field.noneAllowed === true;
   return false;
 }
+
+// Value-aware satisfaction: a CELL mapping is only valid if the cell actually
+// holds a value (null/empty cells are rejected). A COLUMN is valid as long as a
+// column is chosen — its data may be empty (a statement can have zero credit
+// rows and still be a valid config). Fixed/concat/none unchanged.
+function fieldSatisfiedValue(field: { noneAllowed?: boolean }, src: FieldSource, rows: string[][]): boolean {
+  if (src.type === "cell") {
+    const v = String(rows[src.row ?? 0]?.[src.col ?? 0] ?? "").trim();
+    return v.length > 0;
+  }
+  return fieldSatisfied(field, src);
+}
+
+// Known bank names for auto-detecting a bank-name METADATA cell (above the
+// header) when there's no "Bank" column. Specific names only — a generic
+// "Bank Statement" title shouldn't be mistaken for the bank name.
+const BANK_KEYWORDS = [
+  "HSBC", "STANDARD CHARTERED", "SCB", "BARCLAYS", "CITIBANK", "CITI",
+  "DEUTSCHE", "LLOYDS", "NATWEST", "WELLS FARGO", "JPMORGAN", "JP MORGAN",
+  "BNP PARIBAS", "SANTANDER", "BANK OF AMERICA", "ICICI", "HDFC", "AXIS",
+  "KOTAK", "STATE BANK", "YES BANK", "DBS", "OCBC", "UOB", "MIZUHO", "MUFG",
+];
 
 // Representative sample VALUES for a field's source — up to `max` real data
 // values for a column (skipping the header AND any sub-header row, so a
@@ -96,7 +119,7 @@ const FIELD_HELP: Record<LogicalField, string> = {
   date:           "The date the payment arrived — usually the value date or posting date column.",
   narrative:      "The payment description / payer text. The system reads this to identify the customer, so pick the most descriptive column.",
   credit_amount:  "The column showing the amount of money received.",
-  account_number: "Your company's bank account the money was paid into. Used to find the matching OU.",
+  account_number: "The company bank account the money was paid into. The Oracle receipt is created against this account.",
   currency:       "The currency of the payment, e.g. USD or EUR.",
   bank_name:      "The name of the bank. If it isn't in the file, use 'Same value for every row' and type it in.",
   bank_reference: "The bank's own transaction reference number for the payment. If the statement doesn't carry one, choose 'Not in this file'.",
@@ -436,10 +459,13 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
     };
     const b = valueOf("bank_name");
     const c = valueOf("currency");
+    // Standardize the file's currency value to an ISO code for the dropdown
+    // (e.g. "EURO" -> "EUR"); leave unset if it can't be mapped so the user picks.
+    const cIso = normalizeCurrency(c);
     if (b && !bank) setBank(b);
-    if (c && !currency) setCurrency(c);
+    if (cIso && !currency) setCurrency(cIso);
     if (!displayName) {
-      const composed = [b, c].filter(Boolean).join(" — ");
+      const composed = [b, cIso || c].filter(Boolean).join(" — ");
       if (composed) setDisplayName(composed);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -460,21 +486,33 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const backendAccountOk = testResult?.account_ok !== false;
   const accountValueOk = (!accountFieldReason && !accountIdentityReason && backendAccountOk) || overrideAccount;
 
+  // A single account cell holding multiple joined accounts ("A & B") is
+  // ambiguous — the user must pick one (radios on the Columns tab), which pins
+  // it as a fixed value. Only a CELL is forced; a column legitimately has many.
+  const accountCellAccounts = fieldMappings.account_number.type === "cell"
+    ? splitAccounts(String(activeRows[fieldMappings.account_number.row ?? 0]?.[fieldMappings.account_number.col ?? 0] ?? ""))
+    : [];
+  const accountMixedCellUnresolved = accountCellAccounts.length > 1;
+
   // The account issue relevant to the step the user is currently on — drives the
-  // blocking banner + override checkbox shown above the nav.
-  const activeAccountIssue: string | null =
-    step === 3 ? accountFieldReason
-    : step === 5 ? accountIdentityReason
+  // banner above the nav. `canOverride` distinguishes a value we let the SPOC
+  // force past (invalid-looking) from one they must RESOLVE (ambiguous cell).
+  const activeAccountIssue: { message: string; canOverride: boolean } | null =
+    step === 3
+      ? (accountMixedCellUnresolved
+          ? { message: `This account cell holds ${accountCellAccounts.length} account numbers — select the one this config is for in the Account Number field.`, canOverride: false }
+          : accountFieldReason ? { message: accountFieldReason, canOverride: true } : null)
+    : step === 5 ? (accountIdentityReason ? { message: accountIdentityReason, canOverride: true } : null)
     : step === 6 ? (testResult?.account_ok === false
-        ? (testResult.warnings?.find((w) => w.field === "account_number" && w.severity === "error")?.message
-            ?? "The account number extracted from the file doesn't look valid.")
-        : accountIdentityReason)
-    : step === 7 ? accountIdentityReason
+        ? { message: (testResult.warnings?.find((w) => w.field === "account_number" && w.severity === "error")?.message
+              ?? "The account number extracted from the file doesn't look valid."), canOverride: true }
+        : (accountIdentityReason ? { message: accountIdentityReason, canOverride: true } : null))
+    : step === 7 ? (accountIdentityReason ? { message: accountIdentityReason, canOverride: true } : null)
     : null;
 
   const internalChecks = useCallback((): { label: string; ok: boolean }[] => {
     const requiredMapped = LOGICAL_FIELDS.filter((f) => f.required).every((f) =>
-      fieldSatisfied(f, fieldMappings[f.name]));
+      fieldSatisfiedValue(f, fieldMappings[f.name], activeRows));
     return [
       { label: "Header row selected",              ok: headerRow !== null },
       { label: "All required columns are mapped",  ok: requiredMapped },
@@ -482,7 +520,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       { label: "Account number identified",        ok: !!accountNumber.trim() },
       { label: "Account number is valid",          ok: accountValueOk },
     ];
-  }, [fieldMappings, creditRule, accountNumber, headerRow, accountValueOk]);
+  }, [fieldMappings, creditRule, accountNumber, headerRow, accountValueOk, activeRows]);
 
   const internalPass = internalChecks().every((c) => c.ok);
   // The draft must pass BOTH the internal checks and the live parse (user test)
@@ -500,9 +538,10 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
     if (step === 2) return headerRow !== null;
     if (step === 3) {
       const requiredMapped = LOGICAL_FIELDS.filter((f) => f.required).every((f) =>
-        fieldSatisfied(f, fieldMappings[f.name]));
-      // Block a label-cell/invalid account value unless the user explicitly overrode.
-      return requiredMapped && (!accountFieldReason || overrideAccount);
+        fieldSatisfiedValue(f, fieldMappings[f.name], activeRows));
+      // Block a label-cell/invalid account (overridable) OR an unresolved
+      // ambiguous multi-account cell (must pick one — not overridable).
+      return requiredMapped && (!accountFieldReason || overrideAccount) && !accountMixedCellUnresolved;
     }
     if (step === 4) return !!creditRule.field;
     if (step === 5) return !!accountNumber.trim() && (!accountIdentityReason || overrideAccount);  // Account step
@@ -561,6 +600,25 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       (i) => hasSub(i, "reference"),
       (i) => hasTok(i, "ref"),
     );
+    // Bank name: a column whose header names the bank (excluding bank-reference/
+    // -account/-branch/-code columns that merely contain the word "bank").
+    const bankCol = pick(
+      (i) => hasSub(i, "bank name"),
+      (i) => hasTok(i, "bank") && !hasSub(i, "ref") && !hasSub(i, "account")
+             && !hasSub(i, "acc") && !hasSub(i, "branch") && !hasSub(i, "code") && !hasSub(i, "swift"),
+    );
+    // …else a metadata cell ABOVE the header that names a known bank.
+    let bankCell: { row: number; col: number } | null = null;
+    if (!bankCol) {
+      const hdr = headerRow ?? 0;
+      for (let ri = 0; ri < hdr && !bankCell; ri++) {
+        const row = activeRows[ri] ?? [];
+        for (let ci = 0; ci < row.length; ci++) {
+          const v = String(row[ci] ?? "").toUpperCase();
+          if (v && BANK_KEYWORDS.some((k) => v.includes(k))) { bankCell = { row: ri, col: ci }; break; }
+        }
+      }
+    }
 
     setFieldMappings((prev) => ({
       ...prev,
@@ -570,10 +628,15 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       // Only auto-fill the reference when we actually spot one; otherwise leave it
       // unselected so the user consciously picks a column or "Not in this file".
       bank_reference: refCol ? { type: "column", name: refCol } : prev.bank_reference,
+      // Bank name: column first, else a matched metadata cell; else leave as-is
+      // (the user provides it — it's now required and can't be left empty).
+      bank_name: bankCol ? { type: "column", name: bankCol }
+                 : bankCell ? { type: "cell", row: bankCell.row, col: bankCell.col }
+                 : prev.bank_name,
     }));
     // NOTE: the Credit Rule column is intentionally NOT pre-selected — the user
     // must consciously pick it on the Credit Rule step.
-  }, [step, columns, headerRow]);
+  }, [step, columns, headerRow, activeRows]);
 
   // ── Render ────────────────────────────────────────────────────────────────────
   const modal = (
@@ -689,25 +752,31 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
           )}
         </div>
 
-        {/* ── Account-number gate — blocks Next/Save unless overridden ── */}
+        {/* ── Account-number gate — blocks Next/Save ── */}
         {activeAccountIssue && (
-          <div className="border-t border-red-200 bg-red-50 px-6 py-3 shrink-0">
+          <div className={`border-t px-6 py-3 shrink-0 ${activeAccountIssue.canOverride ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}>
             <div className="flex items-start gap-2">
-              <AlertTriangle size={15} className="text-red-600 shrink-0 mt-0.5" />
+              <AlertTriangle size={15} className={`shrink-0 mt-0.5 ${activeAccountIssue.canOverride ? "text-red-600" : "text-amber-600"}`} />
               <div className="flex-1 min-w-0">
-                <p className="text-[12px] font-bold text-red-800">Account number check failed</p>
-                <p className="text-[11px] text-red-700 mt-0.5">{activeAccountIssue}</p>
-                <label className="mt-2 flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={overrideAccount}
-                    onChange={(e) => setOverrideAccount(e.target.checked)}
-                    className="cursor-pointer"
-                  />
-                  <span className="text-[11px] font-semibold text-red-800">
-                    I confirm this is the real account number
-                  </span>
-                </label>
+                <p className={`text-[12px] font-bold ${activeAccountIssue.canOverride ? "text-red-800" : "text-amber-800"}`}>
+                  {activeAccountIssue.canOverride ? "Account number check failed" : "Select an account number"}
+                </p>
+                <p className={`text-[11px] mt-0.5 ${activeAccountIssue.canOverride ? "text-red-700" : "text-amber-700"}`}>{activeAccountIssue.message}</p>
+                {/* Override only for a value we can't validate — an ambiguous
+                    multi-account cell must be RESOLVED (pick one), not overridden. */}
+                {activeAccountIssue.canOverride && (
+                  <label className="mt-2 flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={overrideAccount}
+                      onChange={(e) => setOverrideAccount(e.target.checked)}
+                      className="cursor-pointer"
+                    />
+                    <span className="text-[11px] font-semibold text-red-800">
+                      I confirm this is the real account number
+                    </span>
+                  </label>
+                )}
               </div>
             </div>
           </div>
@@ -1141,7 +1210,7 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
 
   const isMapped = (name: LogicalField): boolean => {
     const field = LOGICAL_FIELDS.find((f) => f.name === name);
-    return field ? fieldSatisfied(field, fieldMappings[name]) : false;
+    return field ? fieldSatisfiedValue(field, fieldMappings[name], activeRows) : false;
   };
 
   // Advance to the NEXT field in order — UNCONDITIONALLY, so the user reviews
@@ -1160,6 +1229,26 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
   // Samples several real data rows (skipping the sub-header), majority-based.
   const fieldWarning = (name: LogicalField): FieldWarning | null =>
     validateFieldSamples(name, fieldSampleValues(fieldMappings[name], columns, activeRows, hRow, subHeaderRow));
+
+  // Surface the account number(s) the current account_number mapping resolves to,
+  // using the SAME splitter as the Account tab — so a mixed "main & sub" cell
+  // (e.g. "41678876 & 41678884") is shown as two, right here on the Columns tab.
+  const accountInfo = (): { accounts: string[]; mixed: boolean } => {
+    const samples = fieldSampleValues(fieldMappings.account_number, columns, activeRows, hRow, subHeaderRow);
+    const perSample = samples.map((s) => splitAccounts(s));
+    const set = new Set<string>();
+    perSample.forEach((a) => a.forEach((x) => set.add(x)));
+    return { accounts: Array.from(set), mixed: perSample.some((a) => a.length > 1) };
+  };
+
+  // Accounts found in a single CELL account mapping. Only a cell can be
+  // ambiguous this way — a column legitimately holds many accounts (one per
+  // row), so multiple there is fine and we don't force a pick.
+  const accountCellSplit = (): string[] => {
+    const s = fieldMappings.account_number;
+    if (s.type !== "cell") return [];
+    return splitAccounts(String(activeRows[s.row ?? 0]?.[s.col ?? 0] ?? ""));
+  };
 
   // First real DATA value (after header + sub-header) for the sample display —
   // not activeRows[hRow+1], which is the sub-header row in two-row-header files.
@@ -1250,10 +1339,60 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
                 </div>
               )}
 
+              {name === "account_number" && (() => {
+                const cellAccts = accountCellSplit();
+                // A single cell holding multiple joined accounts is ambiguous —
+                // force the user to pick exactly one. Picking pins it as a fixed
+                // value so ingest uses that one account (not the mashed cell).
+                if (cellAccts.length > 1) {
+                  return (
+                    <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-start gap-1 text-[9px] text-amber-700 font-semibold">
+                        <AlertTriangle size={10} className="shrink-0 mt-px" />
+                        <span className="leading-tight normal-case">
+                          This cell holds {cellAccts.length} account numbers — select the one this config is for:
+                        </span>
+                      </div>
+                      <div className="space-y-0.5 pl-3.5">
+                        {cellAccts.map((a) => (
+                          <label key={a} className="flex items-center gap-1.5 text-[10px] cursor-pointer">
+                            <input
+                              type="radio"
+                              name={`acct-pick-${name}`}
+                              onChange={() => updateField("account_number", { type: "fixed", value: a })}
+                              className="cursor-pointer"
+                            />
+                            <span className="font-mono text-primary">{a}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+                const info = accountInfo();
+                if (info.accounts.length === 0) return null;
+                return (
+                  <div className="mt-1 flex items-start gap-1 text-[9px] text-gray-600">
+                    <Info size={10} className="shrink-0 mt-px text-gray-400" />
+                    <span className="leading-tight normal-case">
+                      {info.accounts.length > 1
+                        ? <>Identified <b>{info.accounts.length}</b> accounts: <span className="font-mono">{info.accounts.join(", ")}</span></>
+                        : <>Identified account: <span className="font-mono">{info.accounts[0]}</span></>}
+                    </span>
+                  </div>
+                );
+              })()}
+
               {active && (
                 <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+                  {/* What this field is for — plain-language help, shown for the
+                      armed field so the account-vs-account distinction is clear. */}
+                  <p className="text-[10px] text-gray-500 leading-snug">{FIELD_HELP[name]}</p>
                   <div className="flex flex-wrap gap-1">
-                    {MODE_CHIPS.map((chip) => (
+                    {/* "Not in file" (none) is offered only for fields that allow
+                        it (bank reference) — every other field must point at real data. */}
+                    {MODE_CHIPS.filter((chip) => chip.type !== "none"
+                        || LOGICAL_FIELDS.find((f) => f.name === name)?.noneAllowed).map((chip) => (
                       <button
                         key={chip.type}
                         type="button"
@@ -1477,9 +1616,11 @@ function DropdownColumnMapper({ columns, fieldMappings, setFieldMappings, active
                     }}
                     className="w-full text-xs font-bold border border-gray-300 rounded-sm px-3 py-1.5 appearance-none bg-white pr-7 focus:outline-none focus:border-[#222222]"
                   >
-                    {Object.entries(SOURCE_TYPE_LABELS).map(([v, lbl]) => (
-                      <option key={v} value={v}>{lbl}</option>
-                    ))}
+                    {Object.entries(SOURCE_TYPE_LABELS)
+                      .filter(([v]) => v !== "none" || LOGICAL_FIELDS.find((f) => f.name === name)?.noneAllowed)
+                      .map(([v, lbl]) => (
+                        <option key={v} value={v}>{lbl}</option>
+                      ))}
                   </select>
                   <ChevronDown size={13} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 </div>
@@ -2057,15 +2198,24 @@ function StepLocateAccount({
   const [viewMode, setViewMode] = useState<"preview" | "dropdown">("preview");
   const hRow = headerRow ?? 0;
   const cellValue = String(activeRows[accountLocator.row ?? 0]?.[accountLocator.col ?? 0] ?? "");
+  // UI mode splits the "regex" locator type into two: pattern-over-a-column vs
+  // pattern-over-a-fixed-cell (both are type:"regex" with a different `in`).
+  const mode: "cell" | "column" | "regex_col" | "regex_cell" =
+    t === "regex" ? (accountLocator.in?.type === "cell" ? "regex_cell" : "regex_col") : t;
+  const isRegex = t === "regex";
+  const regexCellValue = String(activeRows[accountLocator.in?.row ?? 0]?.[accountLocator.in?.col ?? 0] ?? "");
 
   return (
     <div className="space-y-3">
       {/* header + mode toggle */}
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-black text-primary uppercase tracking-wider">Where is the account number?</h2>
+          <h2 className="text-sm font-black text-primary uppercase tracking-wider">How do we recognise this statement?</h2>
           <p className="text-xs text-gray-500 mt-1">
-            The account number is how this bank statement is recognised — filenames are ignored. Tell us where it appears, then click <strong>Find account</strong>.
+            This account number is the <strong>fingerprint</strong> we use to match an uploaded file to this config — filenames are ignored. Point us to where it appears, then click <strong>Find account</strong>.
+          </p>
+          <p className="text-[11px] text-gray-400 mt-1.5 leading-snug">
+            Not the same as the <strong>Account Number</strong> on the Columns step — that one is the account the Oracle receipt is posted against. This one only identifies which config an uploaded statement belongs to.
           </p>
         </div>
         <div className="flex items-center bg-gray-100 rounded-md p-0.5 shrink-0">
@@ -2090,20 +2240,23 @@ function StepLocateAccount({
           {/* locator type */}
           <div className="flex flex-wrap gap-2">
             {([
-              { v: "cell",   label: "In a fixed cell" },
-              { v: "column", label: "In a column (one per row)" },
-              { v: "regex",  label: "Inside a text column (pattern)" },
+              { v: "cell",       label: "In a fixed cell" },
+              { v: "column",     label: "In a column (one per row)" },
+              { v: "regex_col",  label: "Pattern in a text column" },
+              { v: "regex_cell", label: "Pattern in a fixed cell" },
             ] as const).map((o) => (
               <button
                 key={o.v}
                 type="button"
                 onClick={() => {
+                  const pat = accountLocator.pattern ?? AUTO_ACCOUNT_REGEX;
                   if (o.v === "cell") setAccountLocator({ type: "cell", row: 0, col: 1 });
                   else if (o.v === "column") setAccountLocator({ type: "column", name: columns[0] ?? "" });
-                  else setAccountLocator({ type: "regex", in: { type: "column", name: columns[0] ?? "" }, pattern: AUTO_ACCOUNT_REGEX });
+                  else if (o.v === "regex_col") setAccountLocator({ type: "regex", in: { type: "column", name: columns[0] ?? "" }, pattern: pat });
+                  else setAccountLocator({ type: "regex", in: { type: "cell", row: 0, col: 1 }, pattern: pat });
                 }}
                 className={`text-[11px] font-bold px-3 py-1.5 rounded-sm border cursor-pointer ${
-                  t === o.v ? "bg-[#222222] text-white border-[#222222]" : "bg-white text-gray-600 border-gray-300 hover:border-[#222222]"
+                  mode === o.v ? "bg-[#222222] text-white border-[#222222]" : "bg-white text-gray-600 border-gray-300 hover:border-[#222222]"
                 }`}
               >
                 {o.label}
@@ -2143,7 +2296,7 @@ function StepLocateAccount({
                     </select>
                   </div>
                 )}
-                {t === "regex" && (
+                {mode === "regex_col" && (
                   <div className="flex items-center gap-2">
                     <label className="text-gray-500">In column</label>
                     <select value={accountLocator.in?.name ?? ""}
@@ -2154,42 +2307,81 @@ function StepLocateAccount({
                     </select>
                   </div>
                 )}
+                {mode === "regex_cell" && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-gray-500">Row</label>
+                    <input type="number" min={0} value={accountLocator.in?.row ?? 0}
+                      onChange={(e) => setAccountLocator({ ...accountLocator, in: { type: "cell", row: Number(e.target.value), col: accountLocator.in?.col ?? 0 } })}
+                      className="border border-gray-300 rounded-sm px-2 py-1 w-16 font-mono" />
+                    <label className="text-gray-500">Col</label>
+                    <input type="number" min={0} value={accountLocator.in?.col ?? 0}
+                      onChange={(e) => setAccountLocator({ ...accountLocator, in: { type: "cell", row: accountLocator.in?.row ?? 0, col: Number(e.target.value) } })}
+                      className="border border-gray-300 rounded-sm px-2 py-1 w-16 font-mono" />
+                    {regexCellValue && (
+                      <span className="text-[10px] text-gray-500 font-mono bg-gray-100 px-1.5 py-0.5 rounded truncate max-w-[140px]">
+                        &quot;{regexCellValue}&quot;
+                      </span>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <>
                 <div className="flex items-start gap-2 text-[11px] text-[#222222] font-medium">
                   <MousePointerClick size={13} className="shrink-0 mt-0.5" />
                   <span>
-                    {t === "cell"   && "Click the cell in the preview that holds the account number (incl. rows above the header)."}
-                    {t === "column" && "Click the column header in the preview that holds the account number — one per row."}
-                    {t === "regex"  && "Click the text column header in the preview to scan for account-like values inside it."}
+                    {mode === "cell"       && "Click the cell in the preview that holds the account number (incl. rows above the header)."}
+                    {mode === "column"     && "Click the column header in the preview that holds the account number — one per row."}
+                    {mode === "regex_col"  && "Click the text column header in the preview to scan for account-like values inside it."}
+                    {mode === "regex_cell" && "Click the cell in the preview that holds the account number inside longer text — we'll pull it out with a pattern."}
                   </span>
                 </div>
                 <div className="text-[10px] text-gray-500">
-                  {t === "cell" && (accountLocator.row !== undefined
+                  {mode === "cell" && (accountLocator.row !== undefined
                     ? <>Selected: <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">R{accountLocator.row}·C{accountLocator.col}{cellValue ? ` → "${cellValue}"` : ""}</span></>
                     : <span className="italic">No cell selected yet.</span>)}
-                  {t === "column" && (accountLocator.name
+                  {mode === "column" && (accountLocator.name
                     ? <>Column: <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{accountLocator.name}</span></>
                     : <span className="italic">No column selected yet.</span>)}
-                  {t === "regex" && (accountLocator.in?.name
+                  {mode === "regex_col" && (accountLocator.in?.name
                     ? <>Scanning column: <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{accountLocator.in.name}</span></>
                     : <span className="italic">No column selected yet.</span>)}
+                  {mode === "regex_cell" && (accountLocator.in?.row !== undefined
+                    ? <>Scanning cell: <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">R{accountLocator.in.row}·C{accountLocator.in.col}{regexCellValue ? ` → "${regexCellValue}"` : ""}</span></>
+                    : <span className="italic">No cell selected yet.</span>)}
                 </div>
               </>
             )}
 
-            {/* regex explainer — shown in both modes since detection is automatic */}
-            {t === "regex" && (
-              <div className="flex items-start gap-2 text-[10px] text-gray-500 bg-white border border-gray-200 rounded p-2">
-                <Info size={12} className="shrink-0 mt-0.5 text-[#222222]" />
-                <span>
-                  We automatically detect account-number-like values inside this column —
-                  numeric (e.g. <span className="font-mono">000205024781</span>) and
-                  alphanumeric / IBAN-style (e.g. <span className="font-mono">GB29NWBK…</span>),
-                  even when buried in text like “… (INR) - 000205024781”. Pick the column,
-                  click <strong>Find account</strong>, then choose the right one below.
-                </span>
+            {/* regex explainer — shown for both regex modes since detection is automatic */}
+            {isRegex && (
+              <div className="space-y-2">
+                <div className="flex items-start gap-2 text-[10px] text-gray-500 bg-white border border-gray-200 rounded p-2">
+                  <Info size={12} className="shrink-0 mt-0.5 text-[#222222]" />
+                  <span>
+                    We automatically detect account-number-like values inside the{" "}
+                    {mode === "regex_cell" ? "cell" : "column"} —
+                    numeric (e.g. <span className="font-mono">000205024781</span>) and
+                    alphanumeric / IBAN-style (e.g. <span className="font-mono">GB29NWBK…</span>),
+                    even when buried in text like “… (INR) - 000205024781”. Pick the{" "}
+                    {mode === "regex_cell" ? "cell" : "column"}, click <strong>Find account</strong>,
+                    then choose the right one below.
+                  </span>
+                </div>
+                {/* Advanced: override the auto pattern for a tricky source. */}
+                <details className="text-[10px] text-gray-500">
+                  <summary className="cursor-pointer font-bold uppercase tracking-wider text-gray-400 hover:text-[#222222]">
+                    Advanced: edit pattern
+                  </summary>
+                  <input
+                    type="text"
+                    value={accountLocator.pattern ?? AUTO_ACCOUNT_REGEX}
+                    onChange={(e) => setAccountLocator({ ...accountLocator, pattern: e.target.value })}
+                    placeholder={AUTO_ACCOUNT_REGEX}
+                    className="mt-1 w-full border border-gray-300 rounded-sm px-2 py-1 font-mono text-[10px] focus:outline-none focus:border-[#222222]"
+                  />
+                  <span className="block mt-1 italic">Regex; the last capture group (or the whole match) is used as the account.</span>
+                </details>
               </div>
             )}
 
@@ -2253,16 +2445,19 @@ function StepLocateAccount({
             columns={columns}
             activeRows={activeRows}
             headerRow={hRow}
-            isCellClickable={(ri, ci, isHeader) => viewMode === "preview" && (t === "cell" ? true : isHeader)}
+            isCellClickable={(ri, ci, isHeader) => viewMode === "preview" && (mode === "cell" || mode === "regex_cell" ? true : isHeader)}
             onCellClick={(ri, ci, isHeader) => {
-              if (t === "cell") setAccountLocator({ type: "cell", row: ri, col: ci });
-              else if (isHeader && t === "column") setAccountLocator({ type: "column", name: columns[ci] });
-              else if (isHeader && t === "regex") setAccountLocator({ type: "regex", in: { type: "column", name: columns[ci] }, pattern: accountLocator.pattern ?? AUTO_ACCOUNT_REGEX });
+              const pat = accountLocator.pattern ?? AUTO_ACCOUNT_REGEX;
+              if (mode === "cell") setAccountLocator({ type: "cell", row: ri, col: ci });
+              else if (mode === "regex_cell") setAccountLocator({ type: "regex", in: { type: "cell", row: ri, col: ci }, pattern: pat });
+              else if (isHeader && mode === "column") setAccountLocator({ type: "column", name: columns[ci] });
+              else if (isHeader && mode === "regex_col") setAccountLocator({ type: "regex", in: { type: "column", name: columns[ci] }, pattern: pat });
             }}
             cellHighlight={(ri, ci, isHeader) => {
-              if (t === "cell") return accountLocator.row === ri && accountLocator.col === ci;
-              if (isHeader && t === "column") return accountLocator.name === columns[ci];
-              if (isHeader && t === "regex") return accountLocator.in?.name === columns[ci];
+              if (mode === "cell") return accountLocator.row === ri && accountLocator.col === ci;
+              if (mode === "regex_cell") return accountLocator.in?.row === ri && accountLocator.in?.col === ci;
+              if (isHeader && mode === "column") return accountLocator.name === columns[ci];
+              if (isHeader && mode === "regex_col") return accountLocator.in?.name === columns[ci];
               return false;
             }}
           />
@@ -2343,8 +2538,17 @@ function StepSave({
         </div>
         <div className="space-y-1.5">
           <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">Currency <span className="text-red-500">*</span></label>
-          <input type="text" placeholder="e.g. USD" value={currency} onChange={(e) => setCurrency(e.target.value)}
-            className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#222222]" />
+          {/* Validated ISO-4217 dropdown — Fusion requires a standard code. The
+              value is prefilled by normalizing the file's currency ("EURO" -> EUR);
+              if the file value isn't a standard code the list still holds it so the
+              current selection never silently disappears. */}
+          <select value={currency} onChange={(e) => setCurrency(e.target.value)}
+            className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#222222] bg-white">
+            <option value="">Select a currency…</option>
+            {(ISO_4217.includes(currency) || !currency ? ISO_4217 : [currency, ...ISO_4217]).map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
         </div>
         <div className="space-y-1.5">
           <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">Organization Unit <span className="text-red-500">*</span></label>
