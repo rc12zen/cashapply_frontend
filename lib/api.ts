@@ -159,7 +159,7 @@ export const getIngestStatus = (sourceFileId: number) =>
  * flow (a plain re-upload would be blocked as a duplicate and not re-parse).
  */
 export const reingestStatement = (sourceFileId: number) =>
-  API.post(`/api/run/files/${sourceFileId}/reingest`);
+  API.post(`/api/run/files/${sourceFileId}/reingest`, {});
 
 export const uploadAgingReport = (file: File) => {
   const form = new FormData();
@@ -366,7 +366,7 @@ export const getApprovalPreview = (id: number)                   => API.get(`/ap
 export const rejectEntry        = (id: number, comment?: string) => API.post(`/api/hitl/reject/${id}`, { comment });
 export const approveBulk        = (ids: number[])                => API.post("/api/hitl/approve-bulk", { ids });
 export const getHitlHistory     = ()                             => API.get("/api/hitl/history");
-export const retryOracle        = (id: number)                   => API.post(`/api/hitl/retry-oracle/${id}`);
+export const retryOracle        = (id: number)                   => API.post(`/api/hitl/retry-oracle/${id}`, {});
 // Read-only — tells the frontend whether retryOracleBulkForRun() would
 // actually be allowed to run for this run_id right now (every receipt in
 // the run currently failed), WITHOUT retrying anything. Used to decide
@@ -378,12 +378,12 @@ export const getRetryEligibilityForRun = (runId: number) =>
 // the run currently shows failed; a mixed run is rejected with a clear
 // error rather than partially retried (see hitl/service.py's
 // retry_receipt_creation_bulk_for_run() for the exact rule).
-export const retryOracleBulkForRun = (runId: number) => API.post(`/api/hitl/retry-oracle-bulk-for-run/${runId}`);
+export const retryOracleBulkForRun = (runId: number) => API.post(`/api/hitl/retry-oracle-bulk-for-run/${runId}`, {});
 // Manual counterpart to the periodic remittance_recheck_worker (see
 // rule_engine/remittance_recheck.py) — re-checks THIS row against
 // remittances persisted since it landed in needs_remittance, instead of
 // waiting for the next scheduled sweep (REMITTANCE_RECHECK_INTERVAL_SECONDS).
-export const recheckRemittance  = (id: number)                   => API.post(`/api/hitl/${id}/recheck-remittance`);
+export const recheckRemittance  = (id: number)                   => API.post(`/api/hitl/${id}/recheck-remittance`, {});
 // Correct a wrongly AI-identified customer name and re-run matching --
 // see rule_engine/customer_name_correction.py. Backend refuses (returns a
 // real error) if this row has already been approved/rejected/manually
@@ -473,7 +473,7 @@ export const getAgingHistory = () => API.get("/api/config/aging-history");
  * customer_count, filename }.
  */
 export const selectAgingSource = (sourceFileId: number) =>
-  API.post(`/api/config/aging-select/${sourceFileId}`);
+  API.post(`/api/config/aging-select/${sourceFileId}`, {});
 
 // ── Filters ───────────────────────────────────────────────────────────────────
 /**
