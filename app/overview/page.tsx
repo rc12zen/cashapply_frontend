@@ -101,10 +101,17 @@ export default function OverviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Refetch whenever a filter changes — the type filters (bank/BU/user) AND
+  // the time period. timePeriod was previously missing here, so clicking a
+  // period pill (Today/WTD/…) only highlighted the button without refetching;
+  // data updated only when a type filter happened to change. Bare "Custom
+  // Date" is skipped because its date inputs call doFetchMetrics directly on
+  // change (so customStartDate/customEndDate stay out of the deps to avoid a
+  // double fetch).
   useEffect(() => {
-    doFetchMetrics(timePeriod, customStartDate, customEndDate);
+    if (timePeriod !== "Custom Date") doFetchMetrics(timePeriod, customStartDate, customEndDate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBank, selectedBU, selectedUser]);
+  }, [selectedBank, selectedBU, selectedUser, timePeriod]);
 
   const g  = metrics?.groups ?? EMPTY_GROUPS;
   const ga = metrics?.group_amounts ?? EMPTY_GA;
