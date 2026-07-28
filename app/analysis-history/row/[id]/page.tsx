@@ -112,12 +112,25 @@ export default function RowDetailPage() {
   // Auto-open remittance panel when one was found
   useEffect(() => { if (detail?.remittance) setRemittanceCollapsed(false); }, [detail?.remittance]);
 
-  // Whether this row is even eligible for manual mapping — anything NOT
-  // already ready_for_oracle or processed. Computed early so both the
-  // fetch effect and the render below can use it.
+  // Whether this row is even eligible for manual mapping.
+  // PATCH: this used to ONLY check category !== "ready_for_oracle" &&
+  // category !== "processed" -- which meant an APPROVED row that later
+  // landed in post_failed (receipt creation failed AFTER approval), or
+  // any other category besides exactly "processed", still showed the
+  // Manual Invoice Mapping card. category and "has a SPOC decision been
+  // made" are two different things -- hitl_status is set the instant a
+  // row is approved/rejected (see hitl/service.py's approve_row()),
+  // regardless of what category it's sitting in afterward. Once a row
+  // has been approved (or rejected), mapping should never be offered
+  // again, in ANY category -- re-mapping underneath an already-made human
+  // decision would be nonsensical (the backend's confirm_manual_mapping()
+  // doesn't specifically guard this today, so this is currently the ONLY
+  // place enforcing it -- worth confirming the backend also refuses it).
   const canManuallyMap = !!detail
     && detail.category !== "ready_for_oracle"
-    && detail.category !== "processed";
+    && detail.category !== "processed"
+    && !detail.manually_mapped
+    && !detail.oracle?.hitl_status;
 
   // Whether the AI-identified customer name can be corrected on this row.
   // Mirrors rule_engine/customer_name_correction.py's _is_correctable()
