@@ -69,11 +69,25 @@ export interface BuilderTestRow {
   bank_reference: string | null;
 }
 
+// A value-level sanity finding from the backend field checks (or the live
+// client-side mirror). `field` is a LogicalField; account_number failures are
+// "error" (blocking), everything else is "warn".
+export interface FieldWarning {
+  field: string;
+  severity: "error" | "warn";
+  message: string;
+  sample?: string | null;
+}
+
 export interface BuilderTestResult {
   success: boolean;
   row_count: number;
   rows: BuilderTestRow[];
   error?: string;
+  // Value-level sanity checks over the parsed rows (additive — older backends
+  // omit these; treat missing as "no findings" / account_ok = true).
+  warnings?: FieldWarning[];
+  account_ok?: boolean;
 }
 
 export interface BuilderSaveResult {
@@ -104,6 +118,9 @@ export interface LocateAccountResult {
   count: number;
   last4s: string[];
   existing: Record<string, string[]>;   // account -> formats already configured
+  // account -> reason string when the value doesn't look like a real account
+  // (label/heading cell, no digits, wrong length), else null. Additive.
+  account_issues?: Record<string, string | null>;
 }
 
 export interface SaveRecipePayload {
@@ -123,6 +140,10 @@ export interface SaveRecipePayload {
   // and passed explicitly by the wizard since configBuilderApi's axios has no
   // dev-user interceptor. Shown as "added by"; omitted if unknown.
   created_by?: string;
+  // Set true only when the user ticked "I confirm this is the real account
+  // number" to override the structural account-number gate (see backend's
+  // SaveRecipeRequest.override_account_validation).
+  override_account_validation?: boolean;
 }
 
 // One saved version of a recipe (metadata only — the recipe body is not carried
