@@ -49,6 +49,28 @@ export function accountRejectReason(value: string | null | undefined): string | 
   return null;
 }
 
+// Mirror of backend account_locator.split_accounts — splits a cell that may
+// hold several accounts ("41678876 & 41678884") into normalized tokens. Splits
+// on & , / + and 'and' only (never spaces, so "0002 0502 4781" stays intact).
+const ACCT_SEP = /\s*(?:&|,|\/|\+|\band\b)\s*/i;
+function looksLikeAccount(n: string): boolean {
+  return n.length >= 6 && /\d/.test(n);
+}
+export function splitAccounts(value: string | null | undefined): string[] {
+  const raw = String(value ?? "").trim();
+  if (!raw || ["nan", "none", "nat"].includes(raw.toLowerCase())) return [];
+  const tokens = raw.split(ACCT_SEP).map((p) => normalizeAccount(p));
+  const acctLike = tokens.filter((t) => t && looksLikeAccount(t));
+  if (acctLike.length === 0) {
+    const whole = normalizeAccount(raw);
+    return whole ? [whole] : [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of acctLike) if (!seen.has(t)) { seen.add(t); out.push(t); }
+  return out;
+}
+
 const CCY_RE = /^[A-Za-z]{3}$/;
 const NUMERIC_LIKE_RE = /^[\d.,\-+\s]+$/;
 
