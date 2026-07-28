@@ -50,7 +50,7 @@ export default function Dashboard() {
   // PATCH: account-level pending counts + which accounts are checked to be
   // included in the next run. Keyed by String(bank_account_id), or
   // "unresolved" for files whose account couldn't be determined at ingest.
-  const [pendingByAccount, setPendingByAccount] = useState<Record<string, { account_number: string | null; bank_name: string; pending_row_count: number; last_consumed_run_id?: number | null }>>({});
+  const [pendingByAccount, setPendingByAccount] = useState<Record<string, { account_number: string | null; bank_name: string; business_unit: string; ou_number: string; pending_row_count: number; last_consumed_run_id?: number | null }>>({});
   // PATCH: tracks accounts the user has explicitly UNCHECKED (opt-out model).
   // Anything not in this set is included by default — including an account
   // that's never been seen before (e.g. just uploaded) — without needing to
@@ -161,11 +161,14 @@ export default function Dashboard() {
     try {
       const res = await getPendingByAccount();
       const accounts: any[] = res.data.accounts || [];
-      const byKey: Record<string, { account_number: string | null; bank_name: string; pending_row_count: number; last_consumed_run_id?: number | null }> = {};
+      const byKey: Record<string, { account_number: string | null; bank_name: string; business_unit: string; ou_number: string; pending_row_count: number; last_consumed_run_id?: number | null }> = {};
       accounts.forEach((a) => {
         const key = a.bank_account_id != null ? String(a.bank_account_id) : "unresolved";
         byKey[key] = {
           account_number: a.account_number, bank_name: a.bank_name,
+          // BU/OU resolved from the account's CURRENT OU mapping (backend
+          // /pending-by-account), not the per-file snapshot — see accountGroups.
+          business_unit: a.business_unit ?? "", ou_number: a.ou_number ?? "",
           pending_row_count: a.pending_row_count, last_consumed_run_id: a.last_consumed_run_id ?? null,
         };
       });
@@ -401,8 +404,11 @@ export default function Dashboard() {
           bank_account_id: f.bank_account_id ?? null,
           account_number: meta?.account_number ?? null,
           bank_name: meta?.bank_name || f.bank_name,
-          business_unit: f.business_unit,
-          ou_number: f.ou_number,
+          // Prefer the account's CURRENT resolved OU (from /pending-by-account)
+          // over the stale per-file snapshot, so a file ingested before its
+          // account's OU was set up still shows the correct Business Unit.
+          business_unit: meta?.business_unit || f.business_unit,
+          ou_number: meta?.ou_number || f.ou_number,
           files: [],
           pending_row_count: meta?.pending_row_count ?? 0,
           last_consumed_run_id: meta?.last_consumed_run_id ?? null,
