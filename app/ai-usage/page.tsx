@@ -17,10 +17,10 @@
  * "Last 5 Analyses" below shows per-run AI cost/usage for the most recent
  * completed runs (GET /api/ai-usage/recent) — also respects the User filter.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight, Download, Sparkles, User as UserIcon } from "lucide-react";
 import {
-  getAiUsageSummary, getAiUsageTotals, downloadAiUsageCsv, getAiUsageRecentRuns,
+  getAiUsageSummary, getAiUsageTotals, getAiUsageRecentRuns,
   type AiUsageSummary, type AiUsageTotals, type AiUsageRecentRun,
 } from "@/lib/ai-usage/api";
 import { getFilterOptions } from "@/lib/api";
@@ -52,6 +52,7 @@ export default function AiUsagePage() {
   const [error, setError]     = useState("");
   const [techOpen, setTechOpen] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const snapshotRef = useRef<HTMLDivElement>(null);
 
   const [timePeriod, setTimePeriod] = useState("Last Analysis");
   const [customStart, setCustomStart] = useState("");
@@ -95,18 +96,33 @@ export default function AiUsagePage() {
   const fmtCost = (v: number | undefined) => `$${(v ?? 0).toFixed(4)}`;
   const fmtTokens = (v: number | undefined) => (v ?? 0).toLocaleString();
 
-  const handleDownload = async () => {
+  const handleDownloadPdf = async () => {
+    if (!snapshotRef.current) return;
     setDownloading(true);
     try {
-      const userFilter = selectedUser !== "All Users" ? selectedUser : undefined;
-      let dateFrom: string | undefined, dateTo: string | undefined;
-      if (timePeriod !== "Last Analysis") {
-        const dr = buildDateRange(timePeriod, customStart, customEnd);
-        dateFrom = dr.date_from; dateTo = dr.date_to;
-      }
-      await downloadAiUsageCsv(undefined, dateFrom, dateTo, userFilter);
+      const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf"),
+      ]);
+      const canvas = await html2canvas(snapshotRef.current, { scale: 2, backgroundColor: "#ffffff" });
+      const img = canvas.toDataURL("image/png");
+      const headerH = 28;
+      const doc = new jsPDF({ orientation: "landscape", unit: "px", format: [canvas.width, canvas.height + headerH] });
+      const filterLine = [
+        `Period: ${timePeriod}${timePeriod === "Custom Date" ? ` (${customStart} to ${customEnd})` : ""}`,
+        `User: ${selectedUser}`,
+      ].join("   ·   ");
+      doc.setFontSize(12);
+      doc.text(filterLine, 8, 18);
+      doc.addImage(img, "PNG", 0, headerH, canvas.width, canvas.height);
+      const p = (n: number) => String(n).padStart(2, "0");
+      const d = new Date();
+      const stamp =
+        `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+        `_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+      doc.save(`AI_Usage_${stamp}.pdf`);
     } catch (e) {
-      setError(getErrorMessage(e, "Failed to download AI usage CSV."));
+      setError(getErrorMessage(e, "Failed to generate AI usage PDF."));
     } finally {
       setDownloading(false);
     }
@@ -181,51 +197,54 @@ export default function AiUsagePage() {
             </div>
             <div className="flex items-center gap-4 pt-0.5 shrink-0">
               <button
-                onClick={handleDownload}
+                onClick={handleDownloadPdf}
                 disabled={downloading}
                 className="text-xs text-[#222222] hover:underline cursor-pointer disabled:opacity-50 flex items-center gap-1 font-bold"
               >
-                <Download size={12} /> {downloading ? "Downloading…" : "Download CSV"}
+                <Download size={12} /> {downloading ? "Downloading…" : "Download PDF"}
               </button>
             </div>
           </div>
 
-          {/* Stat tiles */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-px bg-gray-100">
-            <div className="bg-[#F7FAFF] p-5">
-              <div className="text-[11px] font-bold tracking-wide text-[#8A93A6] uppercase mb-2">Cost (Selected Scope)</div>
-              <div className="text-[22px] font-bold text-[#1F9254]">{fmtCost(summary?.total_cost_usd)}</div>
+          {/* Snapshot target for Download PDF — stat tiles + by-model breakdown */}
+          <div ref={snapshotRef} className="bg-white">
+            {/* Stat tiles */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-px bg-gray-100">
+              <div className="bg-[#F7FAFF] p-5">
+                <div className="text-[11px] font-bold tracking-wide text-[#8A93A6] uppercase mb-2">Cost (Selected Scope)</div>
+                <div className="text-[22px] font-bold text-[#1F9254]">{fmtCost(summary?.total_cost_usd)}</div>
+              </div>
+              <div className="bg-white p-5">
+                <div className="text-[11px] font-bold tracking-wide text-[#8A93A6] uppercase mb-2">Cost This Month</div>
+                <div className="text-[22px] font-bold text-[#1F9254]">{fmtCost(totals?.month_cost_usd)}</div>
+              </div>
+              <div className="bg-white p-5">
+                <div className="text-[11px] font-bold tracking-wide text-[#8A93A6] uppercase mb-2">Total Cost to Date</div>
+                <div className="text-[22px] font-bold text-[#1F9254]">{fmtCost(totals?.all_time_cost_usd)}</div>
+              </div>
+              <div className="bg-white p-5">
+                <div className="text-[11px] font-bold tracking-wide text-[#8A93A6] uppercase mb-2">Times AI Was Used</div>
+                <div className="text-[22px] font-bold text-[#222222]">{(summary?.call_count ?? 0).toLocaleString()}</div>
+                <div className="text-[11px] text-[#9AA3B5] mt-1">In the selected scope</div>
+              </div>
             </div>
-            <div className="bg-white p-5">
-              <div className="text-[11px] font-bold tracking-wide text-[#8A93A6] uppercase mb-2">Cost This Month</div>
-              <div className="text-[22px] font-bold text-[#1F9254]">{fmtCost(totals?.month_cost_usd)}</div>
-            </div>
-            <div className="bg-white p-5">
-              <div className="text-[11px] font-bold tracking-wide text-[#8A93A6] uppercase mb-2">Total Cost to Date</div>
-              <div className="text-[22px] font-bold text-[#1F9254]">{fmtCost(totals?.all_time_cost_usd)}</div>
-            </div>
-            <div className="bg-white p-5">
-              <div className="text-[11px] font-bold tracking-wide text-[#8A93A6] uppercase mb-2">Times AI Was Used</div>
-              <div className="text-[22px] font-bold text-[#222222]">{(summary?.call_count ?? 0).toLocaleString()}</div>
-              <div className="text-[11px] text-[#9AA3B5] mt-1">In the selected scope</div>
-            </div>
-          </div>
 
-          {/* Per-model breakdown, when there's more than a trivial amount of usage */}
-          {summary && summary.by_model.length > 0 && (
-            <div className="px-5 py-4 border-t border-gray-100 space-y-2">
-              <div className="text-[11px] font-bold text-[#8A93A6] uppercase tracking-wide">By Model</div>
-              {summary.by_model.map((m) => (
-                <div key={m.model} className="flex items-center justify-between text-[13px]">
-                  <span className="font-semibold text-[#222222]">{m.model}</span>
-                  <span className="text-[#6B7688]">
-                    {m.call_count.toLocaleString()} calls · {(m.input_tokens + m.output_tokens).toLocaleString()} tok ·{" "}
-                    <span className="text-[#1F9254] font-bold">{fmtCost(m.cost_usd)}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+            {/* Per-model breakdown, when there's more than a trivial amount of usage */}
+            {summary && summary.by_model.length > 0 && (
+              <div className="px-5 py-4 border-t border-gray-100 space-y-2">
+                <div className="text-[11px] font-bold text-[#8A93A6] uppercase tracking-wide">By Model</div>
+                {summary.by_model.map((m) => (
+                  <div key={m.model} className="flex items-center justify-between text-[13px]">
+                    <span className="font-semibold text-[#222222]">{m.model}</span>
+                    <span className="text-[#6B7688]">
+                      {m.call_count.toLocaleString()} calls · {(m.input_tokens + m.output_tokens).toLocaleString()} tok ·{" "}
+                      <span className="text-[#1F9254] font-bold">{fmtCost(m.cost_usd)}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Technical details — collapsed by default */}
           <button
