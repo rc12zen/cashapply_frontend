@@ -94,6 +94,14 @@ export interface BuilderSaveResult {
   success: boolean;
   config_key: string;
   message: string;
+  // One entry per account configured by this save (multi-account fan-out).
+  saved?: {
+    account_number: string; display_name: string; created: boolean;
+    format_created: boolean; version: number; ou_number: string; business_unit: string;
+  }[];
+  // Already-configured accounts whose OU this save moved — reported so a
+  // reassignment across N accounts is never silent.
+  ou_changed?: { account_number: string; from_ou_number: string | null; to_ou_number: string }[];
 }
 
 // ── Account-based model ────────────────────────────────────────────────────────
@@ -113,6 +121,25 @@ export interface AccountLocator {
   in?: { type: "cell" | "column" | "sheet"; row?: number; col?: number; name?: string };
 }
 
+// A cell that names several accounts ("41678876 & 41678884"). `key` is the
+// backend's alias_key (sorted tokens joined by "|") and is what the recipe's
+// account_aliases map is keyed on. `chosen` is the primary the user picked, if any.
+export interface MixedAccountCell {
+  key: string;
+  accounts: string[];
+  chosen?: string | null;
+}
+
+// Details already on record for a discovered account — used to prefill the
+// per-account OU table so onboarding N accounts is mostly confirming.
+export interface KnownAccountInfo {
+  display_name?: string | null;
+  bank?: string | null;
+  currency?: string | null;
+  ou_number?: string | null;
+  business_unit?: string | null;
+}
+
 export interface LocateAccountResult {
   accounts: string[];
   count: number;
@@ -121,6 +148,27 @@ export interface LocateAccountResult {
   // account -> reason string when the value doesn't look like a real account
   // (label/heading cell, no digits, wrong length), else null. Additive.
   account_issues?: Record<string, string | null>;
+  // Total discovered before the display cap, and how many were NOT returned.
+  // truncated > 0 must be surfaced — a silently-shortened list reads as complete.
+  total_found?: number;
+  truncated?: number;
+  // Cells naming 2+ accounts; each needs a primary chosen before saving.
+  mixed?: MixedAccountCell[];
+  known?: Record<string, KnownAccountInfo>;
+}
+
+// One account to onboard against the recipe being saved. A COLUMN locator finds
+// several accounts in one file; each gets its own BankAccount + OU but shares the
+// SAME recipe body. Mirrors the backend's AccountAssignment.
+export interface AccountAssignment {
+  account_number: string;
+  display_name: string;
+  ou_number: string;
+  business_unit: string;
+  functional_currency?: string;
+  bank?: string;
+  currency?: string;
+  override_account_validation?: boolean;
 }
 
 export interface SaveRecipePayload {
@@ -144,6 +192,12 @@ export interface SaveRecipePayload {
   // number" to override the structural account-number gate (see backend's
   // SaveRecipeRequest.override_account_validation).
   override_account_validation?: boolean;
+  // MULTI-ACCOUNT FAN-OUT. When set, every entry is configured with the SAME
+  // `recipe` body in one transaction — this is how a file whose account locator
+  // is a COLUMN gets a config for every account it contains, instead of only
+  // one. The scalar fields above still describe the primary (first) account so
+  // older callers/responses stay meaningful.
+  accounts?: AccountAssignment[];
 }
 
 // One saved version of a recipe (metadata only — the recipe body is not carried

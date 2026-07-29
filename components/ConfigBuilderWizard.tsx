@@ -25,8 +25,9 @@ import { getErrorMessage } from "@/lib/errorMessage";
 import { validateFieldSamples, accountReasonForSamples, accountRejectReason, splitAccounts } from "@/lib/configBuilderValidation";
 import { ISO_4217, normalizeCurrency } from "@/lib/currency";
 import type {
-  AccountLocator, BuilderTestResult, CreditRuleConfig, ExclusionRule,
-  FieldSource, FieldWarning, LogicalField, MergeRule, RawPreviewData,
+  AccountAssignment, AccountLocator, BuilderTestResult, CreditRuleConfig, ExclusionRule,
+  FieldSource, FieldWarning, KnownAccountInfo, LogicalField, MergeRule,
+  MixedAccountCell, RawPreviewData,
 } from "@/lib/configBuilderTypes";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -199,6 +200,20 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const [accountNumber, setAccountNumber]   = useState("");   // the identifying account for this config
   const [locating, setLocating]             = useState(false);
   const [locateError, setLocateError]       = useState("");
+  // MULTI-ACCOUNT. A COLUMN locator normally finds several accounts in one file;
+  // every valid one gets configured with this same recipe (backend fan-out), so
+  // these carry the extra per-account state that needs.
+  const [accountIssues, setAccountIssues]   = useState<Record<string, string | null>>({});
+  const [mixedCells, setMixedCells]         = useState<MixedAccountCell[]>([]);
+  // alias_key -> chosen primary account. Saved into the recipe as
+  // `account_aliases` so a "main & sub" cell resolves the same way at detection
+  // and at parse time.
+  const [accountAliases, setAccountAliases] = useState<Record<string, string>>({});
+  const [knownAccounts, setKnownAccounts]   = useState<Record<string, KnownAccountInfo>>({});
+  const [locateTruncated, setLocateTruncated] = useState(0);
+  // account -> { display_name, ou_number, business_unit } for the Save step's
+  // per-account table. Seeded from `known` on locate; edited there.
+  const [assignments, setAssignments] = useState<Record<string, { display_name: string; ou_number: string; business_unit: string }>>({});
 
   // ── Step 7: Test ─────────────────────────────────────────────────────────────
   const [testResult, setTestResult]     = useState<BuilderTestResult | null>(null);
@@ -344,9 +359,13 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       exclusions,
       transforms:   {},
       date_formats: DEFAULT_DATE_FORMATS,
+      // Mixed-cell -> primary-account picks. Applied by both the detector and the
+      // parser, so a "main & sub" cell resolves to one account consistently.
+      ...(Object.keys(accountAliases).length > 0 && { account_aliases: accountAliases }),
     };
   }, [
     previewData, headerRow, buildSource, fieldMappings, creditRule, exclusions, accountLocator,
+    accountAliases,
   ]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -384,12 +403,41 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
     setLocating(true);
     setLocateError("");
     try {
-      const res = await locateAccount(previewData.storage_key, accountLocator, buildSource());
+      const res = await locateAccount(previewData.storage_key, accountLocator, buildSource(), accountAliases);
       const accts: string[] = res.data.accounts ?? [];
+      const issues = res.data.account_issues ?? {};
+      const known = res.data.known ?? {};
       setFoundAccounts(accts);
       setExistingFormats(res.data.existing ?? {});
-      if (accts.length === 1) setAccountNumber(accts[0]);
-      else if (accts.length > 1 && !accts.includes(accountNumber)) setAccountNumber("");
+      setAccountIssues(issues);
+      setMixedCells(res.data.mixed ?? []);
+      setKnownAccounts(known);
+      setLocateTruncated(res.data.truncated ?? 0);
+
+      // Only accounts that pass the structural gate can be configured — a
+      // column locator legitimately picks up a "TOTAL" footer row, and
+      // registering that as an account identity is the corruption bug.
+      const valid = accts.filter((a) => !issues[a]);
+      // Seed the Save step's per-account table, preserving anything already
+      // edited and prefilling from whatever is on record for the account.
+      setAssignments((prev) => {
+        const next: Record<string, { display_name: string; ou_number: string; business_unit: string }> = {};
+        for (const a of valid) {
+          next[a] = prev[a] ?? {
+            display_name: known[a]?.display_name ?? "",
+            ou_number:    known[a]?.ou_number ?? "",
+            business_unit: known[a]?.business_unit ?? "",
+          };
+        }
+        return next;
+      });
+
+      // `accountNumber` stays the PRIMARY account (the one the scalar save
+      // fields describe). With several accounts every valid one is configured,
+      // so default to the first rather than forcing a pick that implies the
+      // others are dropped.
+      if (valid.length >= 1 && !valid.includes(accountNumber)) setAccountNumber(valid[0]);
+      else if (valid.length === 0) setAccountNumber("");
       if (accts.length === 0) setLocateError("No account number found with this rule — adjust and try again.");
     } catch (e: any) {
       setLocateError(getErrorMessage(e, "Could not read the account. Adjust the rule and retry."));
@@ -405,7 +453,38 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
     // value as the identity, the exact thing that corrupted configs.
     if (accountIdentityReason && !overrideAccount) { setSaveError(accountIdentityReason); return; }
     if (!bank.trim() || !currency.trim()) { setSaveError("Bank and Currency are required."); return; }
-    if (!ouNumber.trim() || !businessUnit.trim()) { setSaveError("OU Number and Business Unit are required."); return; }
+
+    // MULTI-ACCOUNT: every valid account found by the locator is configured with
+    // this same recipe, each with its own OU. Only the primary account's OU comes
+    // from the single OU fields; the rest come from the per-account table.
+    const valid = foundAccounts.filter((a) => !accountIssues[a]);
+    const multi = valid.length > 1;
+
+    let accounts: AccountAssignment[] | undefined;
+    if (multi) {
+      const missing = valid.filter(
+        (a) => !assignments[a]?.ou_number?.trim() || !assignments[a]?.business_unit?.trim());
+      if (missing.length > 0) {
+        setSaveError(
+          `Set an Organization Unit for every account before saving — still missing for: ${missing.slice(0, 5).join(", ")}` +
+          `${missing.length > 5 ? ` (and ${missing.length - 5} more)` : ""}.`);
+        return;
+      }
+      accounts = valid.map((a) => ({
+        account_number: a,
+        display_name: (assignments[a].display_name || "").trim() || `${displayName.trim()} · ${a}`,
+        ou_number: assignments[a].ou_number.trim(),
+        business_unit: assignments[a].business_unit.trim(),
+        functional_currency: functionalCurrency.trim() || undefined,
+        bank: bank.trim() || undefined,
+        currency: currency.trim() || undefined,
+        override_account_validation: overrideAccount,
+      }));
+    } else if (!ouNumber.trim() || !businessUnit.trim()) {
+      setSaveError("OU Number and Business Unit are required.");
+      return;
+    }
+
     setSaving(true);
     setSaveError("");
     try {
@@ -413,17 +492,20 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       const ext = previewData?.extension ?? "xlsx";
       const format = ext === "txt" ? "csv" : ext === "xlsm" ? "xlsx" : ext;
       await saveRecipe({
+        // Scalars describe the primary account; `accounts` (when set) is
+        // authoritative for the full fan-out.
         account_number: accountNumber.trim(),
         display_name: displayName.trim(),
         format,
         recipe,
         bank: bank.trim() || undefined,
         currency: currency.trim() || undefined,
-        ou_number: ouNumber.trim(),
-        business_unit: businessUnit.trim(),
+        ou_number: (multi ? assignments[accountNumber]?.ou_number : ouNumber).trim(),
+        business_unit: (multi ? assignments[accountNumber]?.business_unit : businessUnit).trim(),
         functional_currency: functionalCurrency.trim() || undefined,
         override_account_validation: overrideAccount,
         created_by: readLoginStub(),
+        ...(accounts && { accounts }),
       });
       onSaved(accountNumber.trim());
     } catch (e: any) {
@@ -494,6 +576,21 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
     : [];
   const accountMixedCellUnresolved = accountCellAccounts.length > 1;
 
+  // ── Multi-account (Account step) ───────────────────────────────────────────────
+  // A COLUMN locator normally finds several accounts in one file. All of the valid
+  // ones get configured with this same recipe — a partially-configured file is
+  // refused at ingest (detector's INCOMPLETE_ACCOUNTS), so leaving some out just
+  // blocks the statement later.
+  const validFoundAccounts = foundAccounts.filter((a) => !accountIssues[a]);
+  const ignoredFoundAccounts = foundAccounts.filter((a) => !!accountIssues[a]);
+  const isMultiAccount = validFoundAccounts.length > 1;
+  // Cells naming several accounts with no primary chosen yet. Must be resolved:
+  // a row whose account cell names two accounts has no single receipt target.
+  const unresolvedMixedCells = mixedCells.filter((m) => !accountAliases[m.key]);
+  const assignmentsIncomplete = isMultiAccount
+    ? validFoundAccounts.filter((a) => !assignments[a]?.ou_number?.trim() || !assignments[a]?.business_unit?.trim())
+    : [];
+
   // The account issue relevant to the step the user is currently on — drives the
   // banner above the nav. `canOverride` distinguishes a value we let the SPOC
   // force past (invalid-looking) from one they must RESOLVE (ambiguous cell).
@@ -502,7 +599,9 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       ? (accountMixedCellUnresolved
           ? { message: `This account cell holds ${accountCellAccounts.length} account numbers — select the one this config is for in the Account Number field.`, canOverride: false }
           : accountFieldReason ? { message: accountFieldReason, canOverride: true } : null)
-    : step === 5 ? (accountIdentityReason ? { message: accountIdentityReason, canOverride: true } : null)
+    : step === 5 ? (unresolvedMixedCells.length > 0
+        ? { message: `${unresolvedMixedCells.length} cell(s) name more than one account (${unresolvedMixedCells.map((m) => m.accounts.join(" & ")).slice(0, 3).join("; ")}). Choose which account each one belongs to — a row naming two accounts has no single receipt target.`, canOverride: false }
+        : (accountIdentityReason ? { message: accountIdentityReason, canOverride: true } : null))
     : step === 6 ? (testResult?.account_ok === false
         ? { message: (testResult.warnings?.find((w) => w.field === "account_number" && w.severity === "error")?.message
               ?? "The account number extracted from the file doesn't look valid."), canOverride: true }
@@ -528,10 +627,26 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   // when the parse itself succeeded — the "passed the test but was wrong" hole.
   const testPassed = internalPass && testResult?.success === true;
 
-  // Any edit that changes the recipe invalidates a prior passing test — force a re-run.
+  // Any edit that changes the recipe invalidates a prior passing test — force a
+  // re-run. account_aliases is part of the recipe (it changes which account each
+  // row resolves to), so a new pick must invalidate the test too.
   useEffect(() => {
     setTestResult(null);
-  }, [fieldMappings, creditRule, accountLocator, accountNumber, headerRow, subHeaderRow, selectedSheet, mergeRules]);
+  }, [fieldMappings, creditRule, accountLocator, accountNumber, headerRow, subHeaderRow, selectedSheet, mergeRules, accountAliases]);
+
+  // Picking a primary for a mixed cell changes WHICH accounts the file contains
+  // (the sub-account collapses away), so the discovered list must be recomputed —
+  // otherwise the Save step would still offer to configure an account that no
+  // longer exists as far as detection is concerned. Only re-runs after a first
+  // successful locate; handleLocate never writes accountAliases, so no loop.
+  const aliasSig = JSON.stringify(accountAliases);
+  const lastAliasSigRef = useRef(aliasSig);
+  useEffect(() => {
+    if (lastAliasSigRef.current === aliasSig) return;
+    lastAliasSigRef.current = aliasSig;
+    if (step === 5 && previewData && foundAccounts.length > 0) void handleLocate();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aliasSig]);
 
   // ── Validation helpers ────────────────────────────────────────────────────────
   const canProceed = (): boolean => {
@@ -544,11 +659,20 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       return requiredMapped && (!accountFieldReason || overrideAccount) && !accountMixedCellUnresolved;
     }
     if (step === 4) return !!creditRule.field;
-    if (step === 5) return !!accountNumber.trim() && (!accountIdentityReason || overrideAccount);  // Account step
+    // Account step. Every mixed cell must have a primary chosen (not overridable)
+    // — otherwise detection refuses the file later with nothing the user can act on.
+    if (step === 5) {
+      return !!accountNumber.trim() && (!accountIdentityReason || overrideAccount)
+        && unresolvedMixedCells.length === 0;
+    }
     if (step === 6) return testPassed;                 // Test step — must pass internal + user test
     if (step === 7) {
-      const base = !!displayName.trim() && !!ouNumber.trim() && !!businessUnit.trim();
-      return base && (!accountIdentityReason || overrideAccount);
+      // With several accounts, the per-account OU table replaces the single OU
+      // fields — every account must have one before any of them is written.
+      const ouOk = isMultiAccount
+        ? assignmentsIncomplete.length === 0
+        : !!ouNumber.trim() && !!businessUnit.trim();
+      return !!displayName.trim() && ouOk && (!accountIdentityReason || overrideAccount);
     }
     return true;
   };
@@ -728,6 +852,8 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   foundAccounts, existingFormats, accountNumber, setAccountNumber,
                   locating, locateError, handleLocate,
                   extension: previewData?.extension ?? "xlsx",
+                  accountIssues, validFoundAccounts, ignoredFoundAccounts, isMultiAccount,
+                  mixedCells, accountAliases, setAccountAliases, locateTruncated,
                 }} />
               )}
               {step === 6 && (
@@ -746,6 +872,8 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   extension: previewData?.extension ?? "xlsx",
                   saving, saveError,
                   availableOUs, ousLoading, ousError,
+                  isMultiAccount, validFoundAccounts, assignments, setAssignments,
+                  knownAccounts, assignmentsIncomplete,
                 }} />
               )}
             </>
@@ -2178,6 +2306,8 @@ function StepLocateAccount({
   columns, activeRows, headerRow, accountLocator, setAccountLocator,
   foundAccounts, existingFormats, accountNumber, setAccountNumber,
   locating, locateError, handleLocate, extension,
+  accountIssues, validFoundAccounts, ignoredFoundAccounts, isMultiAccount,
+  mixedCells, accountAliases, setAccountAliases, locateTruncated,
 }: {
   columns: string[];
   activeRows: string[][];
@@ -2192,6 +2322,14 @@ function StepLocateAccount({
   locateError: string;
   handleLocate: () => void;
   extension: string;
+  accountIssues: Record<string, string | null>;
+  validFoundAccounts: string[];
+  ignoredFoundAccounts: string[];
+  isMultiAccount: boolean;
+  mixedCells: MixedAccountCell[];
+  accountAliases: Record<string, string>;
+  setAccountAliases: (v: Record<string, string>) => void;
+  locateTruncated: number;
 }) {
   const t = accountLocator.type;
   const fmt = extension === "txt" ? "csv" : extension === "xlsm" ? "xlsx" : extension;
@@ -2398,33 +2536,154 @@ function StepLocateAccount({
             </div>
           )}
 
-          {/* results */}
-          {foundAccounts.length > 0 && (
-            <div className="space-y-2">
-              <div className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
-                Found {foundAccounts.length} account{foundAccounts.length === 1 ? "" : "s"} — pick the one this config is for
+          {/* Mixed cells — a cell naming several accounts needs ONE primary, since
+              a row naming two accounts has no single receipt target. Resolved here
+              (not guessed) and stored in the recipe as account_aliases. */}
+          {mixedCells.length > 0 && (
+            <div className="space-y-2 border border-amber-200 bg-amber-50 rounded p-2.5">
+              <div className="flex items-start gap-1.5">
+                <AlertTriangle size={13} className="shrink-0 mt-0.5 text-amber-600" />
+                <div className="text-[11px] text-amber-800">
+                  <span className="font-bold">
+                    {mixedCells.length} cell{mixedCells.length === 1 ? "" : "s"} name more than one account.
+                  </span>{" "}
+                  Pick which one the money should be applied to — we&apos;ll use that account
+                  everywhere this pairing appears, in this file and in future ones.
+                </div>
               </div>
-              <div className="space-y-1.5">
-                {foundAccounts.map((a) => {
-                  const exists = existingFormats[a];
-                  return (
-                    <label key={a} className={`flex flex-wrap items-center gap-2 border rounded p-2 cursor-pointer ${accountNumber === a ? "border-[#222222] bg-[#222222]/5" : "border-gray-200"}`}>
-                      <input type="radio" name="acct" checked={accountNumber === a} onChange={() => setAccountNumber(a)} />
-                      <span className="font-mono text-xs font-bold text-primary">{a}</span>
-                      {exists && (
-                        <span className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs">
-                          <AlertTriangle size={10} /> exists ({exists.join(", ")})
-                          {exists.includes(fmt) ? ` — saving adds a new ${fmt} version` : ` — this adds a ${fmt} recipe`}
-                        </span>
-                      )}
-                    </label>
-                  );
-                })}
+              {mixedCells.map((m) => (
+                <div key={m.key} className="bg-white border border-amber-200 rounded p-2 space-y-1.5">
+                  <div className="text-[10px] text-gray-500 font-mono truncate">{m.accounts.join("  &  ")}</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {m.accounts.map((a) => (
+                      <button
+                        key={a}
+                        type="button"
+                        onClick={() => setAccountAliases({ ...accountAliases, [m.key]: a })}
+                        className={`text-[10px] font-mono font-bold px-2 py-1 rounded-sm border cursor-pointer ${
+                          accountAliases[m.key] === a
+                            ? "bg-[#222222] text-white border-[#222222]"
+                            : "bg-white text-gray-600 border-gray-300 hover:border-[#222222]"
+                        }`}
+                      >
+                        {a}
+                      </button>
+                    ))}
+                  </div>
+                  {!accountAliases[m.key] && (
+                    <div className="text-[10px] text-amber-700 italic">No account chosen yet.</div>
+                  )}
+                </div>
+              ))}
+              <div className="text-[10px] text-amber-700">
+                The account list below updates automatically as you pick.
               </div>
             </div>
           )}
 
-          {accountNumber && (
+          {/* results */}
+          {foundAccounts.length > 0 && (
+            <div className="space-y-2">
+              {isMultiAccount ? (
+                <>
+                  {/* MULTI-ACCOUNT. Every valid account gets its own config using
+                      this same recipe. Configuring only one would leave the rest
+                      unrecognised — and a statement containing an unconfigured
+                      account is refused at ingest, so it just blocks later. */}
+                  <div className="flex items-start gap-1.5 border border-[#222222]/20 bg-[#222222]/5 rounded p-2.5">
+                    <Info size={13} className="shrink-0 mt-0.5 text-[#222222]" />
+                    <div className="text-[11px] text-primary">
+                      <span className="font-bold">
+                        This file holds {validFoundAccounts.length} different accounts.
+                      </span>{" "}
+                      All {validFoundAccounts.length} will be configured with this same recipe — you&apos;ll
+                      set each one&apos;s Organization Unit on the Save step. Leaving any of them out
+                      would stop this statement from being processed at all.
+                    </div>
+                  </div>
+                  <div className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
+                    Accounts to configure
+                  </div>
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                    {validFoundAccounts.map((a) => {
+                      const exists = existingFormats[a];
+                      return (
+                        <div key={a} className="flex flex-wrap items-center gap-2 border border-gray-200 rounded p-2">
+                          <Check size={12} className="text-emerald-600 shrink-0" />
+                          <span className="font-mono text-xs font-bold text-primary">{a}</span>
+                          {exists ? (
+                            <span className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs">
+                              <AlertTriangle size={10} /> exists ({exists.join(", ")})
+                              {exists.includes(fmt) ? ` — adds a new ${fmt} version` : ` — adds a ${fmt} recipe`}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-xs font-bold">new</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
+                    Found {foundAccounts.length} account{foundAccounts.length === 1 ? "" : "s"} — pick the one this config is for
+                  </div>
+                  <div className="space-y-1.5">
+                    {foundAccounts.map((a) => {
+                      const exists = existingFormats[a];
+                      const issue = accountIssues[a];
+                      return (
+                        <label key={a} className={`flex flex-wrap items-center gap-2 border rounded p-2 ${issue ? "border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed" : `cursor-pointer ${accountNumber === a ? "border-[#222222] bg-[#222222]/5" : "border-gray-200"}`}`}>
+                          <input type="radio" name="acct" checked={accountNumber === a} disabled={!!issue} onChange={() => setAccountNumber(a)} />
+                          <span className="font-mono text-xs font-bold text-primary">{a}</span>
+                          {issue && <span className="text-[10px] text-gray-500">{issue}</span>}
+                          {exists && (
+                            <span className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-xs">
+                              <AlertTriangle size={10} /> exists ({exists.join(", ")})
+                              {exists.includes(fmt) ? ` — saving adds a new ${fmt} version` : ` — this adds a ${fmt} recipe`}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* Values the locator found that don't look like account numbers —
+                  e.g. a "TOTAL" footer row caught by a column locator. Shown so
+                  their exclusion is visible, never registered as an account. */}
+              {isMultiAccount && ignoredFoundAccounts.length > 0 && (
+                <details className="text-[10px] text-gray-500">
+                  <summary className="cursor-pointer font-bold uppercase tracking-wider text-gray-400 hover:text-[#222222]">
+                    {ignoredFoundAccounts.length} value{ignoredFoundAccounts.length === 1 ? "" : "s"} skipped — not account numbers
+                  </summary>
+                  <div className="mt-1 space-y-1">
+                    {ignoredFoundAccounts.map((a) => (
+                      <div key={a} className="flex flex-wrap items-baseline gap-1.5">
+                        <span className="font-mono text-gray-600">{a}</span>
+                        <span className="italic">{accountIssues[a]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              {locateTruncated > 0 && (
+                <div className="flex items-start gap-1.5 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                  <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                  <span>
+                    {locateTruncated} more account{locateTruncated === 1 ? "" : "s"} were found but are not
+                    shown here. That usually means the locator is pointing at the wrong column — check it
+                    before saving, or those accounts will be left unconfigured.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {accountNumber && !isMultiAccount && (
             <div className="text-xs text-gray-600">
               This config will be keyed to account <span className="font-mono font-bold">{accountNumber}</span>.
             </div>
@@ -2480,6 +2739,8 @@ function StepSave({
   extension,
   saving, saveError,
   availableOUs, ousLoading, ousError,
+  isMultiAccount, validFoundAccounts, assignments, setAssignments,
+  knownAccounts, assignmentsIncomplete,
 }: {
   displayName: string; setDisplayName: (v: string) => void;
   bank: string; setBank: (v: string) => void;
@@ -2494,6 +2755,12 @@ function StepSave({
   availableOUs: { ou_number: string; business_unit: string | null }[];
   ousLoading: boolean;
   ousError: string;
+  isMultiAccount: boolean;
+  validFoundAccounts: string[];
+  assignments: Record<string, { display_name: string; ou_number: string; business_unit: string }>;
+  setAssignments: (v: Record<string, { display_name: string; ou_number: string; business_unit: string }>) => void;
+  knownAccounts: Record<string, KnownAccountInfo>;
+  assignmentsIncomplete: string[];
 }) {
   const exists = existingFormats[accountNumber];
   const selectedOU = availableOUs.find((o) => o.ou_number === ouNumber);
@@ -2507,15 +2774,48 @@ function StepSave({
     setBusinessUnit(match?.business_unit || "");
   };
 
+  // ── Per-account OU table (multi-account fan-out) ─────────────────────────────
+  const setRow = (acct: string, patch: Partial<{ display_name: string; ou_number: string; business_unit: string }>) => {
+    const cur = assignments[acct] ?? { display_name: "", ou_number: "", business_unit: "" };
+    setAssignments({ ...assignments, [acct]: { ...cur, ...patch } });
+  };
+  const setRowOu = (acct: string, value: string) => {
+    const match = availableOUs.find((o) => o.ou_number === value);
+    // Same rule as the single-account path: a known OU fills its Business Unit
+    // name; a new one clears it so the person names it once.
+    setRow(acct, { ou_number: value, business_unit: match?.business_unit || "" });
+  };
+  // "Set every account to this OU" — the common case is N accounts under one OU,
+  // and clicking through N dropdowns for that is pure friction.
+  const applyOuToAll = (value: string) => {
+    if (!value) return;
+    const match = availableOUs.find((o) => o.ou_number === value);
+    const next = { ...assignments };
+    for (const a of validFoundAccounts) {
+      const cur = next[a] ?? { display_name: "", ou_number: "", business_unit: "" };
+      next[a] = { ...cur, ou_number: value, business_unit: match?.business_unit || "" };
+    }
+    setAssignments(next);
+  };
+
   return (
-    <div className="space-y-4 max-w-lg">
+    <div className={`space-y-4 ${isMultiAccount ? "max-w-3xl" : "max-w-lg"}`}>
       <div>
         <h2 className="text-sm font-black text-primary uppercase tracking-wider">Save Config</h2>
-        <p className="text-xs text-gray-500 mt-1">
-          This config is keyed to account <span className="font-mono font-bold">{accountNumber || "—"}</span>
-          {exists ? ` (already has: ${exists.join(", ")})` : ""}. Bank and Currency are pre-filled from your
-          column mapping — edit if needed. All fields are required.
-        </p>
+        {isMultiAccount ? (
+          <p className="text-xs text-gray-500 mt-1">
+            This recipe will be saved for all <span className="font-bold">{validFoundAccounts.length}</span> accounts
+            found in the file. They share the same layout but can each belong to a different
+            Organization Unit — set one per account below. Bank and Currency are pre-filled from your
+            column mapping.
+          </p>
+        ) : (
+          <p className="text-xs text-gray-500 mt-1">
+            This config is keyed to account <span className="font-mono font-bold">{accountNumber || "—"}</span>
+            {exists ? ` (already has: ${exists.join(", ")})` : ""}. Bank and Currency are pre-filled from your
+            column mapping — edit if needed. All fields are required.
+          </p>
+        )}
       </div>
 
       {saveError && (
@@ -2550,6 +2850,7 @@ function StepSave({
             ))}
           </select>
         </div>
+        {!isMultiAccount && (
         <div className="space-y-1.5">
           <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">Organization Unit <span className="text-red-500">*</span></label>
           {ousLoading ? (
@@ -2576,6 +2877,8 @@ function StepSave({
             </select>
           )}
         </div>
+        )}
+        {!isMultiAccount && (
         <div className="space-y-1.5">
           <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">
             Business Unit <span className="text-red-500">*</span>
@@ -2586,6 +2889,7 @@ function StepSave({
             readOnly={isKnownOU}
             className={`w-full text-xs border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-[#222222] ${isKnownOU ? "bg-gray-50 text-gray-500" : ""}`} />
         </div>
+        )}
         <div className="space-y-1.5">
           <label className="block text-[10px] font-black text-gray-400 uppercase tracking-wider">
             Functional (Ledger) Currency <span className="text-gray-400 font-normal">— optional</span>
@@ -2595,8 +2899,137 @@ function StepSave({
         </div>
       </div>
 
-      <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
-        <Info size={11} /> Organization Unit and Business Unit are a required relationship for this account — chosen from your Organization Units, not free-typed. Only set Functional Currency if OU {ouNumber || "…"} is genuinely new — if it already exists, its current currency is kept as-is. File type: <span className="font-mono">{extension}</span>.
+      {/* Per-account OU table. Every account found in the file needs a real
+          Organization Unit before ANY of them is written (one transaction), so a
+          multi-account statement is never left half-configured. */}
+      {isMultiAccount && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
+              Organization Unit per account <span className="text-red-500">*</span>
+            </div>
+            <label className="flex items-center gap-1.5 text-[10px] text-gray-500">
+              Set all to
+              <select
+                value=""
+                onChange={(e) => applyOuToAll(e.target.value)}
+                disabled={ousLoading || availableOUs.length === 0}
+                className="border border-gray-300 rounded-sm px-2 py-1 text-[10px] bg-white disabled:opacity-50"
+              >
+                <option value="">— pick an OU —</option>
+                {availableOUs.map((o) => (
+                  <option key={o.ou_number} value={o.ou_number}>
+                    {o.ou_number}{o.business_unit ? ` — ${o.business_unit}` : " — (new)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {ousError ? (
+            <div className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded-sm px-3 py-2">
+              Couldn&apos;t load Organization Units: {ousError}
+            </div>
+          ) : availableOUs.length === 0 && !ousLoading ? (
+            <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2">
+              No OUs available yet — load an aging report first so its Organization Units show up here.
+            </div>
+          ) : (
+            <div className="border border-gray-200 rounded overflow-auto max-h-72">
+              <table className="w-full text-[11px] border-collapse">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                    <th className="px-2 py-1.5 text-left text-[10px] font-black text-gray-400 uppercase tracking-wider">Account</th>
+                    <th className="px-2 py-1.5 text-left text-[10px] font-black text-gray-400 uppercase tracking-wider">Name</th>
+                    <th className="px-2 py-1.5 text-left text-[10px] font-black text-gray-400 uppercase tracking-wider">Organization Unit</th>
+                    <th className="px-2 py-1.5 text-left text-[10px] font-black text-gray-400 uppercase tracking-wider">Business Unit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {validFoundAccounts.map((a) => {
+                    const row = assignments[a] ?? { display_name: "", ou_number: "", business_unit: "" };
+                    const rowOU = availableOUs.find((o) => o.ou_number === row.ou_number);
+                    const rowKnownOU = !!rowOU?.business_unit;
+                    const priorOU = knownAccounts[a]?.ou_number;
+                    // Reassigning an already-configured account's OU is legitimate
+                    // (it's how a mis-mapped account gets fixed) but must be visible
+                    // — across N accounts a silent change is how OUs get corrupted.
+                    const moved = !!priorOU && !!row.ou_number && priorOU !== row.ou_number;
+                    return (
+                      <tr key={a} className={`border-b border-gray-100 ${!row.ou_number ? "bg-amber-50/50" : ""}`}>
+                        <td className="px-2 py-1.5 font-mono font-bold text-primary whitespace-nowrap align-top">
+                          {a}
+                          {moved && (
+                            <span className="block text-[9px] font-sans font-normal text-amber-700 mt-0.5">
+                              OU changes from {priorOU}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 align-top">
+                          <input
+                            type="text"
+                            value={row.display_name}
+                            placeholder={`${displayName || "Config"} · ${a}`}
+                            onChange={(e) => setRow(a, { display_name: e.target.value })}
+                            className="w-full text-[11px] border border-gray-300 rounded-sm px-2 py-1 focus:outline-none focus:border-[#222222]"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5 align-top">
+                          <select
+                            value={row.ou_number}
+                            onChange={(e) => setRowOu(a, e.target.value)}
+                            className={`w-full text-[11px] border rounded-sm px-2 py-1 bg-white focus:outline-none focus:border-[#222222] ${row.ou_number ? "border-gray-300" : "border-amber-400"}`}
+                          >
+                            <option value="">— select —</option>
+                            {availableOUs.map((o) => (
+                              <option key={o.ou_number} value={o.ou_number}>
+                                {o.ou_number}{o.business_unit ? ` — ${o.business_unit}` : " — (new)"}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1.5 align-top">
+                          <input
+                            type="text"
+                            value={row.business_unit}
+                            placeholder={row.ou_number ? "name this new OU" : "—"}
+                            onChange={(e) => setRow(a, { business_unit: e.target.value })}
+                            readOnly={rowKnownOU}
+                            className={`w-full text-[11px] border border-gray-300 rounded-sm px-2 py-1 focus:outline-none focus:border-[#222222] ${rowKnownOU ? "bg-gray-50 text-gray-500" : ""}`}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {assignmentsIncomplete.length > 0 && (
+            <div className="flex items-start gap-1.5 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+              <span>
+                {assignmentsIncomplete.length} account{assignmentsIncomplete.length === 1 ? "" : "s"} still
+                need an Organization Unit. All accounts are saved together — nothing is written until every
+                one has an OU, so a statement can&apos;t end up half-configured.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="text-[10px] text-gray-400 flex items-start gap-1.5">
+        <Info size={11} className="shrink-0 mt-0.5" />
+        <span>
+          Organization Unit and Business Unit are a required relationship for
+          {isMultiAccount ? " every account" : " this account"} — chosen from your Organization Units, not
+          free-typed. Only set Functional Currency if
+          {isMultiAccount ? " any OU above is" : ` OU ${ouNumber || "…"} is`} genuinely new — an OU that
+          already exists keeps its current currency.
+          {isMultiAccount && " One Functional Currency is applied to every new OU in this batch; onboard OUs separately if they need different ledger currencies."}
+          {" "}File type: <span className="font-mono">{extension}</span>.
+        </span>
       </div>
 
       {saving && (
