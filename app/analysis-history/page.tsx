@@ -455,12 +455,27 @@ function AnalysisHistoryPageInner() {
     return matchBank && matchBU && matchUser;
   }), [runs, selectedBank, selectedBU, searchUser]);
 
-  const exportHistoryCSV = () => {
-    if (!runs.length) return;
-    const h = Object.keys(runs[0]).join(",");
-    const r = runs.map((r) => Object.values(r).map((v) => `"${v??""}`).join(",")).join("\n");
-    const blob = new Blob([h+"\n"+r], {type:"text/csv"});
-    const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="analysis_history.csv"; a.click();
+  const exportHistoryPdf = async () => {
+    if (!filteredRuns.length) return;
+    const { downloadTablePdf } = await import("@/lib/pdf");
+    const headers = ["Time", "Account Statement(s)", "Bank(s)", "BU(s)", "Run By", "Total Rows", "Identified", "Unidentified", "Ready for Oracle", "Status"];
+    const rows = filteredRuns.map((r) => [
+      formatDate(r.started_at),
+      (r.selected_files || []).join(", "),
+      (r.bank_names || []).join(", ") || "—",
+      (r.business_units || []).join(", ") || "—",
+      getRunUser(r.run_id, r.triggered_by),
+      (r.total_credit_rows || 0).toLocaleString(),
+      (r.total_identified || 0).toLocaleString(),
+      (r.total_unidentified || 0).toLocaleString(),
+      (r.total_ready_for_oracle || 0).toLocaleString(),
+      r.status,
+    ]);
+    downloadTablePdf("Analysis_History", headers, rows, {
+      Bank: selectedBank !== "All Banks" ? selectedBank : undefined,
+      BU: selectedBU !== "All BUs" ? selectedBU : undefined,
+      User: searchUser || undefined,
+    });
   };
 
   const exportDetailCSV = () => {
@@ -498,9 +513,9 @@ function AnalysisHistoryPageInner() {
             <h1 className="text-xl font-black text-primary uppercase tracking-wider">Analysis History</h1>
             <p className="text-xs text-gray-500 mt-0.5">All analysis runs across all account statements</p>
           </div>
-          <button onClick={exportHistoryCSV}
+          <button onClick={exportHistoryPdf}
             className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider bg-[#222222] hover:bg-[#222222] text-white px-4 py-2.5 rounded-sm shadow-xs transition-colors cursor-pointer">
-            <Download size={13} /> Download CSV
+            <Download size={13} /> Download PDF
           </button>
         </div>
 

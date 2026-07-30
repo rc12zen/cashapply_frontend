@@ -162,20 +162,28 @@ export default function ActivityLogPage() {
 		);
 	}, [logs, searchQuery]);
 
-	const exportLogsToCSV = () => {
+	const exportLogsToPdf = async () => {
 		if (!filteredLogs.length) return;
-		const headers = ["ID", "Timestamp", "Description", "Action", "User", "Entity Type", "Entity ID", "Status", "IP Address"].join(",");
-		const rows = filteredLogs
-			.map((l) =>
-				`"${l.id}","${fmtTimestamp(l.created_at)}","${l.summary.replace(/"/g, '""')}","${l.action}","${l.user_email ?? "System"}","${l.entity_type ?? ""}","${l.entity_id ?? ""}","${l.status}","${l.ip_address ?? ""}"`,
-			)
-			.join("\n");
-		const blob = new Blob([headers + "\n" + rows], { type: "text/csv;charset=utf-8;" });
-		const url = URL.createObjectURL(blob);
-		const link = document.createElement("a");
-		link.href = url;
-		link.download = `cashapply_activity_log_${new Date().toISOString().split("T")[0]}.csv`;
-		link.click();
+		const { downloadTablePdf } = await import("@/lib/pdf");
+		const headers = ["ID", "Timestamp", "Description", "Action", "User", "Entity Type", "Entity ID", "Status", "IP Address"];
+		const rows = filteredLogs.map((l) => [
+			l.id,
+			fmtTimestamp(l.created_at),
+			l.summary,
+			l.action,
+			l.user_email ?? "System",
+			l.entity_type ?? "",
+			l.entity_id ?? "",
+			l.status,
+			l.ip_address ?? "",
+		]);
+		downloadTablePdf("Activity_Log", headers, rows, {
+			Category: PILLS.find((p) => p.key === activePill)?.label,
+			User: selectedUser !== "All Users" ? selectedUser : undefined,
+			From: dateFrom || undefined,
+			To: dateTo || undefined,
+			Search: searchQuery || undefined,
+		});
 	};
 
 	const handlePurgeSystemLogs = async () => {
@@ -228,11 +236,11 @@ export default function ActivityLogPage() {
 						<RefreshCw size={13} className={loading ? "animate-spin" : ""} /> Refresh
 					</button>
 					<button
-						onClick={exportLogsToCSV}
+						onClick={exportLogsToPdf}
 						disabled={filteredLogs.length === 0}
 						className="flex items-center gap-2 text-xs font-black uppercase tracking-wider bg-[#222222] hover:bg-[#222222] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-sm shadow-xs transition-colors cursor-pointer whitespace-nowrap"
 					>
-						<Download size={13} /> Export CSV
+						<Download size={13} /> Export PDF
 					</button>
 				</div>
 			</div>
