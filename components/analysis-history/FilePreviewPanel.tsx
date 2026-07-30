@@ -128,8 +128,11 @@ export default function FilePreviewPanel({ statementFiles = [], bucket = "active
     const res = await downloadAgingReport();
     const url = URL.createObjectURL(res.data);
     const a = document.createElement("a");
-    a.href = url; a.download = agingPreview?.filename || "aging_report.xlsx"; a.click();
-    URL.revokeObjectURL(url);
+    const baseName = (agingPreview?.filename || "aging_report").replace(/\.[^.]+$/, "");
+    a.href = url; a.download = `${baseName}.zip`; a.click();
+    // Revoking immediately races the browser's async blob read on large files
+    // and truncates the download — defer it instead.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
   return (
