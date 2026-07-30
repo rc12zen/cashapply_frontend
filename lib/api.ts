@@ -387,9 +387,20 @@ export const recheckRemittance  = (id: number)                   => API.post(`/a
 // Correct a wrongly AI-identified customer name and re-run matching --
 // see rule_engine/customer_name_correction.py. Backend refuses (returns a
 // real error) if this row has already been approved/rejected/manually
-// mapped -- see that module's _is_correctable().
+// mapped -- see that module's _is_correctable(). PATCH: customerName must
+// now be a REAL name from the aging report -- validated server-side (see
+// correct_customer_name()'s docstring) -- the frontend should source it
+// from getCustomerNameOptions() below, not a free-text box.
 export const correctCustomerName = (id: number, customerName: string) =>
 	API.post(`/api/hitl/${id}/correct-customer-name`, { customer_name: customerName });
+// Real candidate customer names for correcting a wrongly AI-identified
+// customer -- mirrors getMappingOptions()'s customer-list branch exactly
+// (same aging_map.customers_for_ou() source, same 500-name cap), so the
+// picker is a REAL dropdown sourced from the aging report, not free
+// text. See rule_engine/customer_name_correction.py's
+// get_customer_name_options(). Returns { customers: string[], ou_number }.
+export const getCustomerNameOptions = (id: number) =>
+	API.get(`/api/hitl/${id}/customer-name-options`);
 
 // ── Manual invoice mapping ───────────────────────────────────────────────────
 // For rows that didn't land in ready_for_oracle automatically. Confirming

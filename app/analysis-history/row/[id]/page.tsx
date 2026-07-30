@@ -27,6 +27,17 @@
  *    (already built above) is what actually posts, once the row shows up
  *    there — same two-gate model as an automatic match.
  *    Backend: hitl/manual_mapping.py via /api/hitl/{id}/mapping-*.
+ *
+ *  - PATCH: customer-name correction now uses a REAL dropdown sourced
+ *    from the currently-loaded aging report (aging_map.customers_for_ou()),
+ *    exactly mirroring the Manual Invoice Mapping card's customer
+ *    <select> — not a free-text box. Free text invited typos and
+ *    couldn't reliably re-match anything; this now reuses the same
+ *    picker pattern and data source the rest of the app already relies
+ *    on. Backend: rule_engine/customer_name_correction.py's
+ *    get_customer_name_options() + server-side validation in
+ *    correct_customer_name() (rejects anything not a real aging-report
+ *    name, regardless of what's sent).
  */
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, Loader2,
@@ -39,7 +50,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance,
   getMappingOptions, getInvoicesForCustomer, previewManualMapping, confirmManualMapping,
-  correctCustomerName,
+  correctCustomerName, getCustomerNameOptions,
   downloadStorageFile,
 } from "@/lib/api";
 
@@ -296,26 +307,56 @@ export default function RowDetailPage() {
   // category (it may move to ready_for_oracle, stay put, or land
   // somewhere else entirely — whatever the corrected name actually
   // resolves to).
+  //
+  // PATCH: customerNameInput is now populated by PICKING from a real
+  // dropdown (customerNameOptions, sourced from the aging report), not
+  // typed freely — see openCorrectCustomerName below. Mirrors the Manual
+  // Invoice Mapping card's customer <select> exactly.
   const [correctingCustomerName, setCorrectingCustomerName] = useState(false);
   const [customerNameInput, setCustomerNameInput]           = useState("");
   const [customerNameLoading, setCustomerNameLoading]       = useState(false);
   const [customerNameError, setCustomerNameError]           = useState("");
+  const [customerNameOptions, setCustomerNameOptions]             = useState<string[]>([]);
+  const [customerNameOptionsLoading, setCustomerNameOptionsLoading] = useState(false);
+  const [customerNameOptionsError, setCustomerNameOptionsError]   = useState("");
 
-  useEffect(() => { setCorrectingCustomerName(false); setCustomerNameError(""); }, [recordId]);
+  useEffect(() => {
+    setCorrectingCustomerName(false);
+    setCustomerNameError("");
+    setCustomerNameOptions([]);
+    setCustomerNameOptionsError("");
+  }, [recordId]);
 
-  const openCorrectCustomerName = () => {
-    setCustomerNameInput(detail?.extraction.extracted_customer || "");
+  const openCorrectCustomerName = async () => {
     setCustomerNameError("");
     setCorrectingCustomerName(true);
+    setCustomerNameOptionsLoading(true);
+    setCustomerNameOptionsError("");
+    try {
+      const res = await getCustomerNameOptions(recordId);
+      const options: string[] = res.data.customers || [];
+      setCustomerNameOptions(options);
+      // Pre-select the current AI guess ONLY if it happens to already be
+      // a real name in this list -- otherwise leave the picker blank so
+      // the SPOC has to actively choose a real one, rather than silently
+      // keeping an unmatched guess pre-filled.
+      const current = detail?.extraction.extracted_customer || "";
+      setCustomerNameInput(options.includes(current) ? current : "");
+    } catch (e: any) {
+      setCustomerNameOptionsError(formatApiError(e, "Could not load customer options from the aging report."));
+      setCustomerNameOptions([]);
+      setCustomerNameInput("");
+    }
+    setCustomerNameOptionsLoading(false);
   };
 
   const handleCorrectCustomerName = async () => {
-    const trimmed = customerNameInput.trim();
-    if (!trimmed) { setCustomerNameError("Customer name cannot be blank."); return; }
+    const chosen = customerNameInput.trim();
+    if (!chosen) { setCustomerNameError("Select a customer from the list."); return; }
     setCustomerNameLoading(true);
     setCustomerNameError("");
     try {
-      await correctCustomerName(recordId, trimmed);
+      await correctCustomerName(recordId, chosen);
       setCorrectingCustomerName(false);
       await fetchDetail();
     } catch (e: any) {
@@ -663,18 +704,35 @@ export default function RowDetailPage() {
 
                   {correctingCustomerName ? (
                     <div className="space-y-2">
-                      <input
-                        autoFocus
-                        type="text"
-                        value={customerNameInput}
-                        onChange={(e) => setCustomerNameInput(e.target.value)}
-                        placeholder="Correct customer name…"
-                        className="w-full bg-white border border-gray-300 rounded-sm text-xs font-semibold text-primary px-2.5 py-2 outline-none focus:border-[#222222]"
-                        onKeyDown={(e) => { if (e.key === "Enter") handleCorrectCustomerName(); }}
-                      />
+                      {/* PATCH: real dropdown sourced from the aging report
+                          (aging_map.customers_for_ou()) — replaces the old
+                          free-text <input>. Mirrors the Manual Invoice
+                          Mapping card's customer <select> below exactly. */}
+                      {customerNameOptionsLoading ? (
+                        <div className="flex items-center gap-2 text-gray-400 text-[11px] py-1">
+                          <Loader2 size={12} className="animate-spin" /> Loading customers from aging report…
+                        </div>
+                      ) : customerNameOptionsError ? (
+                        <p className="text-[11px] text-red-600 font-semibold">{customerNameOptionsError}</p>
+                      ) : customerNameOptions.length === 0 ? (
+                        <p className="text-[11px] text-gray-400 italic">
+                          No customers found for this row's OU in the currently-loaded aging report.
+                        </p>
+                      ) : (
+                        <select
+                          autoFocus
+                          value={customerNameInput}
+                          onChange={(e) => setCustomerNameInput(e.target.value)}
+                          className="w-full bg-white border border-gray-300 rounded-sm text-xs font-semibold text-primary px-2.5 py-2 outline-none focus:border-[#222222] cursor-pointer"
+                        >
+                          <option value="">— choose a customer —</option>
+                          {customerNameOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      )}
                       <p className="text-[10px] text-gray-400">
-                        Re-runs matching against this name — the row may move to a different
-                        category (e.g. Ready for Oracle, or a different exception) once saved.
+                        Picked from the currently-loaded aging report — re-runs matching against
+                        this name once saved; the row may move to a different category (e.g.
+                        Ready for Oracle, or a different exception).
                       </p>
                       {customerNameError && (
                         <p className="text-[11px] font-semibold text-red-600">{customerNameError}</p>
@@ -682,7 +740,7 @@ export default function RowDetailPage() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={handleCorrectCustomerName}
-                          disabled={customerNameLoading || !customerNameInput.trim()}
+                          disabled={customerNameLoading || !customerNameInput.trim() || customerNameOptionsLoading}
                           className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider bg-[#222222] hover:bg-black text-white px-3 py-1.5 rounded-sm cursor-pointer disabled:opacity-50"
                         >
                           {customerNameLoading && <Loader2 size={11} className="animate-spin" />}
