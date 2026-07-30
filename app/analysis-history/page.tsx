@@ -84,6 +84,12 @@ interface AnalysisRun {
   bank_names:          string[];
   business_units:      string[];
   total_credit_rows:   number;
+  // PATCH: which aging report this run actually matched against, captured
+  // at run-start — see AnalysisRun.aging_source_file_id in db/models.py.
+  // Both may be null for runs that predate this field or that ran before
+  // any aging report was ever uploaded.
+  aging_source_file_id:   number | null;
+  aging_source_filename:  string | null;
   // PATCH: new taxonomy shown in the Analysis History run-list table —
   // computed server-side by metrics.compute_run_summary_row() via the same
   // _category_for_row() grouping used everywhere else (run-detail, ledger,
@@ -669,7 +675,14 @@ function AnalysisHistoryPageInner() {
                 </div>
               </div>
             )}
-            {previewVisible && <FilePreviewPanel statementFiles={allFiles} bucket="active" />}
+            {previewVisible && (
+              <FilePreviewPanel
+                statementFiles={allFiles}
+                bucket="active"
+                runAgingSourceFileId={viewingRun.aging_source_file_id}
+                runAgingSourceFilename={viewingRun.aging_source_filename}
+              />
+            )}
           </div>
 
           {/* Right panel */}

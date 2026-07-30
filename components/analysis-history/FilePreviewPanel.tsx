@@ -3,17 +3,35 @@
 /**
  * components/analysis-history/FilePreviewPanel.tsx
  * =====================================================
- * The "preview an uploaded statement / the active aging report" panel
- * used on the Analysis History page's run-detail view. Extracted from
+ * The "preview an uploaded statement / an aging report" panel used on the
+ * Analysis History page's run-detail view. Extracted from
  * app/analysis-history/page.tsx to keep that file focused on the
  * history list / run-detail orchestration, not this self-contained
  * preview widget.
+ *
+ * PATCH: aging reports get replaced over time (new upload / watch-folder
+ * drop), but a past run matched against whatever aging report was active
+ * WHEN IT RAN — which may no longer be the active one. This panel now
+ * offers up to two independent aging tabs instead of one:
+ *   - "Run's Aging Report"   — the historical snapshot the viewed run
+ *                              actually matched against (AnalysisRun.
+ *                              aging_source_file_id, resolved server-side).
+ *                              Only shown when the caller supplies
+ *                              runAgingSourceFileId (older runs that predate
+ *                              this field, or that ran before any aging
+ *                              report existed, simply won't have one).
+ *   - "Active Aging Report" — whatever is active right now (unchanged
+ *                              behavior from before this patch).
+ * Each tab has its own preview/loading state and its own download, but
+ * both render through the same PreviewTable — so search/filter behavior
+ * is identical regardless of which aging tab (or the statement tab) is
+ * selected; nothing about the filter logic itself changed.
  */
 import { Download, FileText, Layers, Loader2, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { downloadAgingReport, getAgingPreview, getFilePreview } from "@/lib/api";
 
-type PreviewSource = "statement" | "aging";
+type PreviewSource = "statement" | "aging_run" | "aging_active";
 
 function PreviewTable({ preview, filter, onFilterChange, onDownload }: {
   preview: any;
@@ -82,17 +100,29 @@ function PreviewTable({ preview, filter, onFilterChange, onDownload }: {
   );
 }
 
-export default function FilePreviewPanel({ statementFiles = [], bucket = "active" }: {
+export default function FilePreviewPanel({
+  statementFiles = [], bucket = "active", runAgingSourceFileId, runAgingSourceFilename,
+}: {
   statementFiles: string[];
   bucket?: string;
+  // PATCH: the aging report snapshot the viewed run matched against.
+  // Undefined/null (no run context, or the run predates this field) simply
+  // hides the "Run's Aging Report" tab — "Active Aging Report" is always
+  // available regardless.
+  runAgingSourceFileId?: number | null;
+  runAgingSourceFilename?: string | null;
 }) {
-  const [source, setSource]               = useState<PreviewSource>("statement");
-  const [activeFile, setActiveFile]       = useState(statementFiles[0] || "");
-  const [stmtPreview, setStmtPreview]     = useState<any>(null);
-  const [agingPreview, setAgingPreview]   = useState<any>(null);
-  const [stmtLoading, setStmtLoading]     = useState(false);
-  const [agingLoading, setAgingLoading]   = useState(false);
-  const [filter, setFilter]               = useState("");
+  const hasRunAgingSnapshot = runAgingSourceFileId != null;
+
+  const [source, setSource]                     = useState<PreviewSource>("statement");
+  const [activeFile, setActiveFile]             = useState(statementFiles[0] || "");
+  const [stmtPreview, setStmtPreview]           = useState<any>(null);
+  const [stmtLoading, setStmtLoading]           = useState(false);
+  const [runAgingPreview, setRunAgingPreview]   = useState<any>(null);
+  const [runAgingLoading, setRunAgingLoading]   = useState(false);
+  const [activeAgingPreview, setActiveAgingPreview] = useState<any>(null);
+  const [activeAgingLoading, setActiveAgingLoading] = useState(false);
+  const [filter, setFilter]                     = useState("");
 
   // Load statement preview whenever active file changes
   useEffect(() => {
@@ -103,44 +133,73 @@ export default function FilePreviewPanel({ statementFiles = [], bucket = "active
       .then((res) => { if (!cancelled) setStmtPreview(res.data); })
       // Roles without run:monitor (e.g. Oracle Operator, Auditor) get a 403
       // here — fail gracefully to an empty preview instead of an unhandled
-      // rejection (mirrors the aging-preview handler below).
+      // rejection (mirrors the aging-preview handlers below).
       .catch(() => { if (!cancelled) setStmtPreview(null); })
       .finally(() => { if (!cancelled) setStmtLoading(false); });
     return () => { cancelled = true; };
   }, [activeFile, bucket]);
 
-  // Load aging preview when user switches to aging tab (lazy — only once)
+  // Load the RUN's aging snapshot when that tab is first opened (lazy — only once)
   useEffect(() => {
-    if (source !== "aging" || agingPreview) return;
+    if (source !== "aging_run" || runAgingPreview || !hasRunAgingSnapshot) return;
     let cancelled = false;
-    setAgingLoading(true);
-    getAgingPreview(500)
-      .then((res) => { if (!cancelled) setAgingPreview(res.data); })
-      .catch(() => { if (!cancelled) setAgingPreview(null); })
-      .finally(() => { if (!cancelled) setAgingLoading(false); });
+    setRunAgingLoading(true);
+    getAgingPreview(500, runAgingSourceFileId!)
+      .then((res) => { if (!cancelled) setRunAgingPreview(res.data); })
+      .catch(() => { if (!cancelled) setRunAgingPreview(null); })
+      .finally(() => { if (!cancelled) setRunAgingLoading(false); });
     return () => { cancelled = true; };
-  }, [source, agingPreview]);
+  }, [source, runAgingPreview, hasRunAgingSnapshot, runAgingSourceFileId]);
 
-  const isLoading = source === "statement" ? stmtLoading : agingLoading;
-  const preview   = source === "statement" ? stmtPreview  : agingPreview;
+  // Load the ACTIVE aging report when that tab is first opened (lazy — only once)
+  useEffect(() => {
+    if (source !== "aging_active" || activeAgingPreview) return;
+    let cancelled = false;
+    setActiveAgingLoading(true);
+    getAgingPreview(500)
+      .then((res) => { if (!cancelled) setActiveAgingPreview(res.data); })
+      .catch(() => { if (!cancelled) setActiveAgingPreview(null); })
+      .finally(() => { if (!cancelled) setActiveAgingLoading(false); });
+    return () => { cancelled = true; };
+  }, [source, activeAgingPreview]);
 
-  const downloadAging = async () => {
-    const res = await downloadAgingReport();
+  const isLoading =
+    source === "statement" ? stmtLoading :
+    source === "aging_run" ? runAgingLoading :
+    activeAgingLoading;
+
+  const preview =
+    source === "statement" ? stmtPreview :
+    source === "aging_run" ? runAgingPreview :
+    activeAgingPreview;
+
+  const makeDownloadHandler = (sourceFileId: number | undefined, preview: any) => async () => {
+    const res = await downloadAgingReport(sourceFileId);
     const url = URL.createObjectURL(res.data);
     const a = document.createElement("a");
-    const baseName = (agingPreview?.filename || "aging_report").replace(/\.[^.]+$/, "");
-    a.href = url; a.download = `${baseName}.zip`; a.click();
+    // PATCH: the backend now streams the real .xlsx/.xls/.csv directly
+    // instead of wrapping it in a zip (a zip-of-a-zip opened straight into
+    // Excel/OneDrive was throwing "file format may not be matching with
+    // the file extension" — see config_routes.py's aging_download()).
+    // Save with the file's own name/extension, not a forced ".zip".
+    a.href = url; a.download = preview?.filename || "aging_report";
+    a.click();
     // Revoking immediately races the browser's async blob read on large files
     // and truncates the download — defer it instead.
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
+
+  const onDownload =
+    source === "aging_run"    ? makeDownloadHandler(runAgingSourceFileId ?? undefined, runAgingPreview) :
+    source === "aging_active" ? makeDownloadHandler(undefined, activeAgingPreview) :
+    undefined;
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
 
       {/* ── Source toggle ─────────────────────────────────────────── */}
       <div className="flex-shrink-0 border-b border-gray-200 bg-gray-50 px-3 py-2 space-y-2">
-        {/* Statement / Aging toggle */}
+        {/* Statement / Run's Aging / Active Aging toggle */}
         <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xs p-0.5 w-full">
           <button
             onClick={() => { setSource("statement"); setFilter(""); }}
@@ -149,12 +208,22 @@ export default function FilePreviewPanel({ statementFiles = [], bucket = "active
             }`}>
             <FileText size={10} /> Statement
           </button>
+          {hasRunAgingSnapshot && (
+            <button
+              onClick={() => { setSource("aging_run"); setFilter(""); }}
+              title={runAgingSourceFilename || undefined}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-xs transition-all cursor-pointer ${
+                source === "aging_run" ? "bg-[#222222] text-white" : "text-gray-500 hover:text-[#222222]"
+              }`}>
+              <Layers size={10} /> Run&apos;s Ageing Report
+            </button>
+          )}
           <button
-            onClick={() => { setSource("aging"); setFilter(""); }}
+            onClick={() => { setSource("aging_active"); setFilter(""); }}
             className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-xs transition-all cursor-pointer ${
-              source === "aging" ? "bg-[#222222] text-white" : "text-gray-500 hover:text-[#222222]"
+              source === "aging_active" ? "bg-[#222222] text-white" : "text-gray-500 hover:text-[#222222]"
             }`}>
-            <Layers size={10} /> Ageing Report
+            <Layers size={10} /> Active Ageing Report
           </button>
         </div>
 
@@ -180,12 +249,11 @@ export default function FilePreviewPanel({ statementFiles = [], bucket = "active
         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-gray-400 min-h-[320px]">
           <Loader2 size={28} className="animate-spin" />
           <span className="text-xs font-bold uppercase tracking-wider">
-            {source === "aging" ? "Loading ageing report…" : "Loading preview…"}
+            {source === "statement" ? "Loading preview…" : "Loading ageing report…"}
           </span>
         </div>
       ) : (
-        <PreviewTable preview={preview} filter={filter} onFilterChange={setFilter}
-          onDownload={source === "aging" ? downloadAging : undefined} />
+        <PreviewTable preview={preview} filter={filter} onFilterChange={setFilter} onDownload={onDownload} />
       )}
     </div>
   );

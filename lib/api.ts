@@ -455,19 +455,29 @@ export const refreshAging        = ()                      => API.post("/api/con
 export const removeAging = () => API.delete("/api/config/remove-aging");
 
 /**
- * Preview the currently loaded aging report (first N rows).
+ * Preview an aging report (first N rows). Pass sourceFileId to preview a
+ * specific historical snapshot (e.g. the one a past run matched against —
+ * see AnalysisRun.aging_source_file_id); omit it for the currently active one.
  * Returns { filename, total_rows, columns, rows } — same shape as getFilePreview
  * so both can be rendered with the same table component.
  * Uses max_rows param (not limit — backend reads max_rows).
  */
-export const getAgingPreview = (maxRows: number = 200) =>
-  API.get("/api/config/aging-preview", { params: { max_rows: maxRows } });
+export const getAgingPreview = (maxRows: number = 200, sourceFileId?: number) =>
+  API.get("/api/config/aging-preview", {
+    params: { max_rows: maxRows, source_file_id: sourceFileId },
+  });
 
 /**
  * Downloads the full original aging report file (not just the preview rows).
+ * Streams the real .xlsx/.xls/.csv as-is — no zip wrapper (see backend
+ * config_routes.py's aging_download() for why that was removed). Pass
+ * sourceFileId for the same historical-snapshot behavior as getAgingPreview.
  */
-export const downloadAgingReport = () =>
-  API.get("/api/config/aging-download", { responseType: "blob" });
+export const downloadAgingReport = (sourceFileId?: number) =>
+  API.get("/api/config/aging-download", {
+    params: { source_file_id: sourceFileId },
+    responseType: "blob",
+  });
 
 /**
  * Every aging report ever loaded (manual upload OR the watch-folder

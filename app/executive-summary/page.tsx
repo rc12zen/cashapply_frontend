@@ -328,7 +328,7 @@ export default function ExecutiveSummaryPage() {
           </h1>
           <p className="text-xs text-gray-600 mt-2 leading-relaxed max-w-2xl">
             {viewMode === "posted" ? (
-              <>Audit view of every record that has completed invoice mapping in Oracle Fusion — Full Payment, Acceptable Short Payment, and Cross Currency are the only three categories that ever reach Oracle.</>
+              <>Audit view of every record that has completed invoice mapping in Oracle Fusion — Full Payment, Acceptable Short Payment, and Invoice currency != Credited Currency are the only three categories that ever reach Oracle.</>
             ) : (
               <>Everything that has NOT yet reached Oracle — unidentified rows, rows awaiting remittance, conflicts/exceptions, Cross-OU exposure, rejections, and post failures.</>
             )}
