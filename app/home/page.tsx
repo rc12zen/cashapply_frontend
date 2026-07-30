@@ -40,7 +40,8 @@ import RunControlBar from "./components/RunControlBar";
 import ConfirmRunDialog from "./components/ConfirmRunDialog";
 
 import {
-  type ConfigCandidate, type FileInfo, type AccountGroup, isAccountRunnable,
+  type ConfigCandidate, type FileInfo, type AccountGroup, type StatementGroup,
+  isAccountRunnable,
 } from "./types";
 import { formatGreetingName } from "@/lib/formatName";
 
@@ -50,7 +51,7 @@ export default function Dashboard() {
   // PATCH: account-level pending counts + which accounts are checked to be
   // included in the next run. Keyed by String(bank_account_id), or
   // "unresolved" for files whose account couldn't be determined at ingest.
-  const [pendingByAccount, setPendingByAccount] = useState<Record<string, { account_number: string | null; bank_name: string; business_unit: string; ou_number: string; pending_row_count: number; last_consumed_run_id?: number | null }>>({});
+  const [pendingByAccount, setPendingByAccount] = useState<Record<string, { account_number: string | null; bank_name: string; business_unit: string; ou_number: string; pending_row_count: number; last_consumed_run_id?: number | null; filenames: string[] }>>({});
   // PATCH: tracks accounts the user has explicitly UNCHECKED (opt-out model).
   // Anything not in this set is included by default — including an account
   // that's never been seen before (e.g. just uploaded) — without needing to
@@ -161,7 +162,7 @@ export default function Dashboard() {
     try {
       const res = await getPendingByAccount();
       const accounts: any[] = res.data.accounts || [];
-      const byKey: Record<string, { account_number: string | null; bank_name: string; business_unit: string; ou_number: string; pending_row_count: number; last_consumed_run_id?: number | null }> = {};
+      const byKey: Record<string, { account_number: string | null; bank_name: string; business_unit: string; ou_number: string; pending_row_count: number; last_consumed_run_id?: number | null; filenames: string[] }> = {};
       accounts.forEach((a) => {
         const key = a.bank_account_id != null ? String(a.bank_account_id) : "unresolved";
         byKey[key] = {
@@ -170,6 +171,11 @@ export default function Dashboard() {
           // /pending-by-account), not the per-file snapshot — see accountGroups.
           business_unit: a.business_unit ?? "", ou_number: a.ou_number ?? "",
           pending_row_count: a.pending_row_count, last_consumed_run_id: a.last_consumed_run_id ?? null,
+          // Which statement files hold rows for THIS account. One statement can
+          // appear under several accounts (a multi-account column), which is why
+          // accountGroups is built from this endpoint rather than from the file
+          // list — a file carries only its primary account.
+          filenames: (a.files || []).map((fi: any) => fi.filename),
         };
       });
       setPendingByAccount(byKey);
@@ -393,40 +399,101 @@ export default function Dashboard() {
   // PATCH: group `files` by bank_account_id for the account-level checkbox
   // UI — the orchestrator consumes rows by account, not by file, so
   // selection has to happen at this granularity to match real behavior.
+  // Built from /pending-by-account (the account-level endpoint), NOT by grouping
+  // the file list. A statement whose account_locator is a COLUMN holds rows for
+  // several accounts, but SourceFile.bank_account_id records only the primary —
+  // so keying off the file list collapsed a 6-account statement into one group
+  // and the run/confirm dialog counted only the primary account's rows (9 of 180).
+  // The same file legitimately appears under every account it has rows for.
   const accountGroups: AccountGroup[] = useMemo(() => {
-    const map = new Map<string, AccountGroup>();
-    for (const f of files) {
+    const byName = new Map(files.map((f) => [f.filename, f]));
+    const groups: AccountGroup[] = [];
+    const represented = new Set<string>();
+
+    for (const [key, meta] of Object.entries(pendingByAccount)) {
+      const groupFiles = meta.filenames
+        .map((n) => byName.get(n))
+        .filter((f): f is FileInfo => !!f);
+      if (groupFiles.length === 0) continue;   // account has no currently-listed file
+      groupFiles.forEach((f) => represented.add(f.filename));
+      groups.push({
+        key,
+        bank_account_id: key === "unresolved" ? null : Number(key),
+        account_number: meta.account_number,
+        bank_name: meta.bank_name,
+        // BU/OU come from the account's CURRENT OU mapping, never the per-file
+        // snapshot taken at upload time.
+        business_unit: meta.business_unit,
+        ou_number: meta.ou_number,
+        files: groupFiles,
+        pending_row_count: meta.pending_row_count,
+        last_consumed_run_id: meta.last_consumed_run_id ?? null,
+      });
+    }
+
+    // Safety net for files the account endpoint didn't cover (a failed/stale
+    // fetch, or a file still being ingested). Without this a file could vanish
+    // from the list entirely, taking its Configure / Add Accounts button with it.
+    const leftovers = files.filter((f) => !represented.has(f.filename));
+    const byKey = new Map<string, AccountGroup>();
+    for (const f of leftovers) {
       const key = f.bank_account_id != null ? String(f.bank_account_id) : "unresolved";
-      if (!map.has(key)) {
-        const meta = pendingByAccount[key];
-        map.set(key, {
-          key,
-          bank_account_id: f.bank_account_id ?? null,
-          account_number: meta?.account_number ?? null,
-          bank_name: meta?.bank_name || f.bank_name,
-          // Prefer the account's CURRENT resolved OU (from /pending-by-account)
-          // over the stale per-file snapshot, so a file ingested before its
-          // account's OU was set up still shows the correct Business Unit.
-          business_unit: meta?.business_unit || f.business_unit,
-          ou_number: meta?.ou_number || f.ou_number,
-          files: [],
-          pending_row_count: meta?.pending_row_count ?? 0,
-          last_consumed_run_id: meta?.last_consumed_run_id ?? null,
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key, bank_account_id: f.bank_account_id ?? null,
+          account_number: null, bank_name: f.bank_name,
+          business_unit: f.business_unit, ou_number: f.ou_number,
+          files: [], pending_row_count: 0, last_consumed_run_id: null,
         });
       }
-      map.get(key)!.files.push(f);
+      byKey.get(key)!.files.push(f);
     }
-    return Array.from(map.values());
+    return [...groups, ...byKey.values()];
   }, [files, pendingByAccount]);
 
+  // One entry per uploaded STATEMENT, carrying the accounts its rows belong to.
+  // accountGroups stays account-keyed (the run and the confirm dialog need that
+  // granularity); this is the file-shaped view the Account Statements list needs
+  // so a 6-account statement is listed once, not six times.
+  const statementGroups: StatementGroup[] = useMemo(() => {
+    const map = new Map<string, StatementGroup>();
+    for (const f of files) {
+      map.set(f.filename, {
+        filename: f.filename, file: f, accounts: [], accountKeys: [],
+        pending_row_count: 0,
+      });
+    }
+    for (const g of accountGroups) {
+      for (const f of g.files) {
+        const s = map.get(f.filename);
+        if (!s) continue;
+        s.accounts.push(g);
+        s.accountKeys.push(g.key);
+        s.pending_row_count += g.pending_row_count;
+      }
+    }
+    // Biggest account first — in a multi-account statement one account usually
+    // dominates the row count, and that's the OU worth checking.
+    map.forEach((s) => s.accounts.sort((a, b) => b.pending_row_count - a.pending_row_count));
+    return Array.from(map.values());
+  }, [files, accountGroups]);
+
   const isAccountSelected = (key: string) => !deselectedAccountKeys.has(key);
-  const toggleAccountSelected = (key: string) => {
+  // A statement is selected when its accounts are. They move together (a run
+  // takes whole files), so this is one checkbox over all of them.
+  const isStatementSelected = (s: StatementGroup) =>
+    s.accountKeys.length === 0 ? true : s.accountKeys.every(isAccountSelected);
+  const toggleStatementSelected = (s: StatementGroup) => {
+    if (s.accountKeys.length === 0) return;
+    const turningOff = isStatementSelected(s);
     setDeselectedAccountKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
+      if (turningOff) s.accountKeys.forEach((k) => next.add(k));
+      else s.accountKeys.forEach((k) => next.delete(k));
       return next;
     });
   };
+
 
   const filesAlreadyAnalyzed =
     files.length > 0 &&
@@ -467,7 +534,10 @@ export default function Dashboard() {
       );
       return;
     }
-    const selectedFilenames = runnableSelected.flatMap((g) => g.files.map((f) => f.filename));
+    // De-duplicated: one statement can appear under several accounts (a
+    // multi-account column), and each occurrence is the same physical file.
+    const selectedFilenames = Array.from(
+      new Set(runnableSelected.flatMap((g) => g.files.map((f) => f.filename))));
     setError("");
     // PATCH: no longer starts the run directly here — opens the confirm
     // dialog instead (see ConfirmRunDialog), showing exactly which
@@ -731,9 +801,9 @@ export default function Dashboard() {
 						statementInputRef={statementInputRef}
 						onStatementUpload={handleStatementUpload}
 						statementUploading={statementUploading}
-						accountGroups={accountGroups}
-						isAccountSelected={isAccountSelected}
-						toggleAccountSelected={toggleAccountSelected}
+						statementGroups={statementGroups}
+						isStatementSelected={isStatementSelected}
+						toggleStatementSelected={toggleStatementSelected}
 						detectionInfo={detectionInfo}
 						onOpenResolveForFile={openResolveForFile}
 						onOpenWizardForFile={setWizardFile}

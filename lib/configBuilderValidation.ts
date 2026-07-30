@@ -12,12 +12,22 @@ import type { FieldWarning, LogicalField } from "./configBuilderTypes";
 const MIN_LEN = 6;
 const MAX_LEN = 34;
 
+// A genuine account is overwhelmingly numeric; anything below this that isn't
+// IBAN-shaped is statement furniture ("PAGE1OF1" is 25% digits).
+const MIN_DIGIT_RATIO = 0.5;
+// ISO 13616 IBAN shape — exempt from the ratio rule so no real IBAN is rejected.
+const IBAN_RE = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/;
+
 // Distinctive label words (letters/digits only). A genuine account value
-// (numeric or IBAN-style) never contains these letter sequences.
+// (numeric or IBAN-style) never contains these letter sequences. The second
+// group is statement FURNITURE — page markers, totals and carried balances that
+// a COLUMN account-locator scoops up alongside the real accounts.
 const LABEL_TOKENS = [
   "account", "acct", "ibannumber", "sortcode",
   "customername", "customer", "bankname", "narrative", "description",
   "currency", "reference",
+  "page", "total", "balance", "broughtforward", "carriedforward",
+  "statement", "continued", "summary", "opening", "closing", "grand",
 ];
 
 function compact(value: string): string {
@@ -44,6 +54,13 @@ export function accountRejectReason(value: string | null | undefined): string | 
   for (const token of LABEL_TOKENS) {
     if (c.includes(token)) {
       return `"${raw}" contains the label text "${token}" — pick the actual account number, not a heading cell.`;
+    }
+  }
+  // Mostly-alphabetic values are statement furniture, not accounts.
+  if (!IBAN_RE.test(norm)) {
+    const digits = (norm.match(/\d/g) ?? []).length;
+    if (digits / norm.length < MIN_DIGIT_RATIO) {
+      return `"${raw}" is mostly letters (${digits} digit(s) in ${norm.length} characters) — an account number is either all digits or a valid IBAN.`;
     }
   }
   return null;

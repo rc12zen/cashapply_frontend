@@ -1,7 +1,7 @@
 "use client";
 import { CheckCircle2, AlertTriangle, FileText, Loader2, Settings, UploadCloud, X } from "lucide-react";
 import type { RefObject } from "react";
-import { type AccountGroup, type FileInfo, isAccountRunnable } from "../types";
+import { type StatementGroup, isStatementRunnable, isAccountRunnable } from "../types";
 
 export interface DetectionInfo {
   config_key: string | null;
@@ -13,9 +13,9 @@ interface AccountStatementsCardProps {
   statementInputRef: RefObject<HTMLInputElement>;
   onStatementUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   statementUploading: boolean;
-  accountGroups: AccountGroup[];
-  isAccountSelected: (key: string) => boolean;
-  toggleAccountSelected: (key: string) => void;
+  statementGroups: StatementGroup[];
+  isStatementSelected: (s: StatementGroup) => boolean;
+  toggleStatementSelected: (s: StatementGroup) => void;
   detectionInfo: Record<string, DetectionInfo>;
   onOpenResolveForFile: (filename: string, mode: "ambiguous" | "reconfigure") => void;
   onOpenWizardForFile: (filename: string) => void;
@@ -23,13 +23,19 @@ interface AccountStatementsCardProps {
 }
 
 /**
- * Account Statements card — upload trigger, plus every uploaded file
- * grouped by resolved bank account, with account-level "include in next
- * run" checkboxes and per-file config/ingest-status badges.
+ * Account Statements card — upload trigger, plus one entry per uploaded
+ * STATEMENT with an "include in next run" checkbox, its ingest/config status,
+ * and the bank account(s) its rows belong to.
+ *
+ * Files used to be nested UNDER accounts, which listed a statement once per
+ * account it contained — a single upload whose account-number column held six
+ * accounts appeared as six identical files. Accounts are shown inside the
+ * statement instead, which also matches selection: a run takes whole files, so
+ * all of a statement's accounts are included or excluded together.
  */
 export default function AccountStatementsCard({
   statementInputRef, onStatementUpload, statementUploading,
-  accountGroups, isAccountSelected, toggleAccountSelected,
+  statementGroups, isStatementSelected, toggleStatementSelected,
   detectionInfo, onOpenResolveForFile, onOpenWizardForFile, onRemoveFile,
 }: AccountStatementsCardProps) {
   return (
@@ -59,21 +65,24 @@ export default function AccountStatementsCard({
           <UploadCloud size={14} className="text-[#222222]" />
           <span>{statementUploading ? "Uploading…" : "Upload"}</span>
         </button>
-        {accountGroups.length > 0 && (
+        {statementGroups.length > 0 && (
           <div className="space-y-2.5 max-h-[220px] overflow-y-auto">
-          {accountGroups.map((g) => {
-            // Only recognised accounts with pending rows can be included in a
-            // run (see isAccountRunnable). An Unknown/errored/0-row statement's
-            // checkbox is disabled so it can't be selected into a no-op run.
-            const runnable = isAccountRunnable(g);
-            const selected = runnable && isAccountSelected(g.key);
-            const disabledReason = g.bank_account_id == null
-              ? "Configure this account (Config tab) before it can be analyzed"
-              : g.last_consumed_run_id != null
-                ? `All rows from this statement were already processed in run #${g.last_consumed_run_id} — this is a duplicate, nothing new to analyze`
+          {statementGroups.map((s) => {
+            // Only a statement with at least one recognised, pending-row account
+            // can be included in a run (see isStatementRunnable). An
+            // Unknown/errored/0-row statement's checkbox is disabled so it can't
+            // be selected into a no-op run.
+            const runnable = isStatementRunnable(s);
+            const selected = runnable && isStatementSelected(s);
+            const noAccount = s.accounts.every((a) => a.bank_account_id == null);
+            const lastConsumed = s.accounts.find((a) => a.last_consumed_run_id != null)?.last_consumed_run_id;
+            const disabledReason = s.accounts.length === 0 || noAccount
+              ? "Configure this statement's account(s) before it can be analyzed"
+              : lastConsumed != null
+                ? `All rows from this statement were already processed in run #${lastConsumed} — this is a duplicate, nothing new to analyze`
                 : "No pending rows to analyze";
             return (
-              <div key={g.key} className="border border-gray-200 rounded-xl overflow-hidden">
+              <div key={s.filename} className="border border-gray-200 rounded-xl overflow-hidden">
                 <label
                   className={`flex items-center gap-2 px-2 py-1.5 bg-gray-100/60 select-none ${runnable ? "cursor-pointer" : "cursor-not-allowed opacity-70"}`}
                   title={runnable ? undefined : disabledReason}
@@ -82,18 +91,25 @@ export default function AccountStatementsCard({
                     type="checkbox"
                     checked={selected}
                     disabled={!runnable}
-                    onChange={() => toggleAccountSelected(g.key)}
+                    onChange={() => toggleStatementSelected(s)}
                     className="rounded-md text-[#222222] focus:ring-0 cursor-pointer disabled:cursor-not-allowed"
                   />
                   <span className="text-[10px] font-black text-primary uppercase tracking-wide truncate">
-                    {g.bank_name}{g.account_number ? ` · ${g.account_number}` : ""}
+                    {s.accounts[0]?.bank_name || s.file.bank_name}
+                    {s.accounts.length === 1 && s.accounts[0].account_number
+                      ? ` · ${s.accounts[0].account_number}`
+                      : s.accounts.length > 1
+                        ? ` · ${s.accounts.length} accounts`
+                        : ""}
                   </span>
-                  <span className="ml-auto shrink-0 text-[9px] font-bold uppercase tracking-wide text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-md">
-                    {g.pending_row_count.toLocaleString()} pending row{g.pending_row_count === 1 ? "" : "s"}
-                  </span>
+                  {s.pending_row_count > 0 && (
+                    <span className="ml-auto shrink-0 text-[9px] font-bold uppercase tracking-wide text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-md">
+                      {s.pending_row_count.toLocaleString()} pending row{s.pending_row_count === 1 ? "" : "s"}
+                    </span>
+                  )}
                 </label>
                 <div className="space-y-1.5 p-1.5">
-                  {g.files.map((f: FileInfo) => {
+                  {[s.file].map((f) => {
                     const det = detectionInfo[f.filename];
                     const isAmbiguous = !!det?.ambiguous;
                     // PATCH: detectionInfo is populated ONLY inside
@@ -111,16 +127,25 @@ export default function AccountStatementsCard({
                     // info to use instead.
                     const hasError = f.ingest_status === "error";
                     const isUnrecognized = f.ingest_status === "unrecognized";
+                    // Recognised format, but at least one account in the file has
+                    // no config yet — a partially-configured multi-account
+                    // statement. Distinct from "unknown format": the recipe
+                    // already exists, so this is "add the missing account(s)",
+                    // not "build a config from scratch". Explained inline rather
+                    // than in a tooltip, since a bare Reconfigure button reads as
+                    // "redo the whole thing".
+                    const isIncomplete = isUnrecognized && !!f.bank_config_key;
                     const isUnknown = det
                       ? (!det.config_key && !isAmbiguous)
                       : (!f.bank_name || f.bank_name === "Unknown") && f.ingest_status !== "ready";
                     return (
                       <div
                         key={f.filename}
-                        className={`flex items-center justify-between text-[11px] border rounded-md px-2 py-1.5 gap-2 ${
+                        className={`text-[11px] border rounded-md px-2 py-1.5 ${
                           isUnknown || isAmbiguous || hasError || isUnrecognized ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"
                         }`}
                       >
+                      <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <FileText size={11} className="text-gray-400 shrink-0" />
                           <span className="font-mono font-bold text-primary truncate text-[10px]">{f.filename}</span>
@@ -129,7 +154,12 @@ export default function AccountStatementsCard({
                           ) : isUnknown ? (
                             <span className="shrink-0 text-[9px] font-black uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-md">Unknown</span>
                           ) : (
-                            <span className="text-gray-400 shrink-0 text-[10px]">{f.bank_name} · {f.size_mb}MB</span>
+                            // Just the size. `f.bank_name` is bank_config_key —
+                            // the matched ACCOUNT NUMBER, or the literal
+                            // "Unknown" — which read as "Unknown · 0.22MB" on a
+                            // perfectly-ingested statement. Bank and account
+                            // identity live in the statement header above.
+                            <span className="text-gray-400 shrink-0 text-[10px]">{f.size_mb}MB</span>
                           )}
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
@@ -154,6 +184,11 @@ export default function AccountStatementsCard({
                             <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-md" title={f.ingest_error || "Ingestion failed — see server logs"}>
                               <AlertTriangle size={9} /> Error
                             </span>
+                          ) : isIncomplete ? (
+                            // Format recognised; some account in it isn't configured.
+                            <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-md" title="Some accounts in this statement have no configuration yet">
+                              Accounts Missing
+                            </span>
                           ) : isUnrecognized ? (
                             // No config matched at all — an expected, everyday state,
                             // not a failure. Deliberately NOT styled like Error.
@@ -169,6 +204,10 @@ export default function AccountStatementsCard({
                             <button onClick={() => onOpenResolveForFile(f.filename, "reconfigure")} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title={f.ingest_error || "Ingestion failed — test the matched config, or build a new one"}>
                               <Settings size={10} /> Reconfigure
                             </button>
+                          ) : isIncomplete ? (
+                            <button onClick={() => onOpenResolveForFile(f.filename, "reconfigure")} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title="Add the missing account(s) to this statement's existing config">
+                              <Settings size={10} /> Add Accounts
+                            </button>
                           ) : isUnrecognized || isUnknown ? (
                             <button onClick={() => onOpenWizardForFile(f.filename)} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-amber-700 hover:text-primary cursor-pointer" title="Open Config Builder">
                               <Settings size={10} /> Configure
@@ -183,8 +222,39 @@ export default function AccountStatementsCard({
                           </button>
                         </div>
                       </div>
+                      {/* Spelled out inline: which accounts are already fine and
+                          which still need adding. A bare "Reconfigure" button gave
+                          no hint that most of the statement was already set up. */}
+                      {isIncomplete && f.ingest_error && (
+                        <div className="mt-1.5 pt-1.5 border-t border-amber-200 flex items-start gap-1.5">
+                          <AlertTriangle size={10} className="shrink-0 mt-0.5 text-amber-600" />
+                          <p className="text-[10px] text-amber-800 leading-snug">{f.ingest_error}</p>
+                        </div>
+                      )}
+                      </div>
                     );
                   })}
+                  {/* The accounts this one statement's rows belong to. Only worth
+                      listing when there's more than one — a single-account
+                      statement already shows its account in the header. */}
+                  {s.accounts.length > 1 && (
+                    <div className="px-1 pt-0.5 space-y-0.5">
+                      {s.accounts.map((a) => (
+                        <div key={a.key} className="flex items-baseline gap-1.5 text-[10px]">
+                          <span className="font-mono text-gray-600 shrink-0">{a.account_number || "—"}</span>
+                          {a.business_unit && a.ou_number ? (
+                            <span className="text-gray-400 truncate">{a.business_unit} (OU {a.ou_number})</span>
+                          ) : (
+                            <span className="text-amber-700">no Business Unit</span>
+                          )}
+                          <span className="ml-auto shrink-0 text-gray-400">
+                            {a.pending_row_count.toLocaleString()}
+                            {isAccountRunnable(a) ? "" : " (nothing pending)"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
