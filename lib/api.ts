@@ -667,3 +667,24 @@ export const getNonPostedRecords = (params: {
       page_size: params.pageSize ?? 50,
     },
   });
+/**
+ * Remittance Inbox — browse every remittance email/document App2 has
+ * extracted, independent of any specific row. Each item reports whether
+ * it's been matched to a row yet and, if so, which row(s)/run(s) — see
+ * backend bff/remittance_inbox_routes.py for the matching logic (reads
+ * LineItem.remittance_extraction_id, doesn't recompute anything live).
+ */
+export const getRemittanceInbox = (params: {
+  search?: string;
+  status?: "matched" | "unmatched";
+  page?: number;
+  pageSize?: number;
+} = {}) =>
+  API.get("/api/remittance-inbox/list", {
+    params: {
+      search: params.search || undefined,
+      status: params.status || undefined,
+      page: params.page ?? 1,
+      page_size: params.pageSize ?? 50,
+    },
+  });
