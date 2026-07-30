@@ -121,15 +121,6 @@ export interface AccountLocator {
   in?: { type: "cell" | "column" | "sheet"; row?: number; col?: number; name?: string };
 }
 
-// A cell that names several accounts ("41678876 & 41678884"). `key` is the
-// backend's alias_key (sorted tokens joined by "|") and is what the recipe's
-// account_aliases map is keyed on. `chosen` is the primary the user picked, if any.
-export interface MixedAccountCell {
-  key: string;
-  accounts: string[];
-  chosen?: string | null;
-}
-
 // Details already on record for a discovered account — used to prefill the
 // per-account OU table so onboarding N accounts is mostly confirming.
 export interface KnownAccountInfo {
@@ -152,9 +143,11 @@ export interface LocateAccountResult {
   // truncated > 0 must be surfaced — a silently-shortened list reads as complete.
   total_found?: number;
   truncated?: number;
-  // Cells naming 2+ accounts; each needs a primary chosen before saving.
-  mixed?: MixedAccountCell[];
   known?: Record<string, KnownAccountInfo>;
+  // Echoed back from the request: true when the recipe's per-row account field is
+  // a COLUMN, so every account found needs its own config. False means the
+  // accounts found are candidates to pick ONE from.
+  rows_span_accounts?: boolean;
 }
 
 // One account to onboard against the recipe being saved. A COLUMN locator finds

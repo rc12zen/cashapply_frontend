@@ -31,6 +31,15 @@ export default function ConfirmRunDialog({
 }) {
   const totalPendingRows = groups.reduce((sum, g) => sum + (g.pending_row_count || 0), 0);
   const missingBU = groups.filter((g) => !g.business_unit || !g.ou_number);
+  // Statements whose rows span several accounts (a multi-account account-number
+  // column). Every account in such a statement is processed together — a run
+  // can't take a subset of one file — so it's called out explicitly here rather
+  // than leaving the person to infer it from repeated filenames.
+  const fileAccountCount = new Map<string, number>();
+  groups.forEach((g) => g.files.forEach((f) =>
+    fileAccountCount.set(f.filename, (fileAccountCount.get(f.filename) ?? 0) + 1)));
+  const multiAccountFiles = [...fileAccountCount.entries()].filter(([, n]) => n > 1);
+  const distinctFiles = fileAccountCount.size;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !loading && onCancel()}>
@@ -47,10 +56,35 @@ export default function ConfirmRunDialog({
         <div className="p-4 space-y-3 max-h-[60vh] overflow-y-auto">
           <p className="text-[11px] text-gray-500 font-medium">
             This run will process <strong className="text-primary">{totalPendingRows}</strong> pending
-            row{totalPendingRows === 1 ? "" : "s"} across the account(s) below. Check the Business Unit
-            for each account is correct before continuing — a wrong or misspelled Business Unit name will
-            cause every receipt for that account to be rejected by Oracle later.
+            row{totalPendingRows === 1 ? "" : "s"} across{" "}
+            <strong className="text-primary">{groups.length}</strong> account
+            {groups.length === 1 ? "" : "s"} from {distinctFiles} statement
+            {distinctFiles === 1 ? "" : "s"}. Check the Business Unit for each account is correct before
+            continuing — a wrong or misspelled Business Unit name will cause every receipt for that
+            account to be rejected by Oracle later.
           </p>
+
+          {multiAccountFiles.length > 0 && (
+            <div className="bg-gray-50 border-l-2 border-gray-300 p-2.5 text-[11px] flex items-start gap-2 rounded-r-sm">
+              <Landmark size={13} className="text-gray-400 shrink-0 mt-0.5" />
+              <span className="text-gray-700">
+                {multiAccountFiles.length === 1 ? (
+                  <>
+                    <span className="font-mono text-[10px]">{multiAccountFiles[0][0]}</span> contains{" "}
+                    <strong>{multiAccountFiles[0][1]} different accounts</strong> in its account-number
+                    column.
+                  </>
+                ) : (
+                  <>
+                    <strong>{multiAccountFiles.length} statements</strong> contain several accounts each in
+                    their account-number column.
+                  </>
+                )}{" "}
+                Every account listed below is processed together — each row is posted against its own
+                account and Organization Unit.
+              </span>
+            </div>
+          )}
 
           {missingBU.length > 0 && (
             <div className="bg-amber-50 border-l-2 border-amber-400 p-2.5 text-[11px] flex items-start gap-2 rounded-r-sm">

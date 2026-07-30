@@ -25,14 +25,14 @@ export const uploadBuilderFile = (file: File) => {
 export const getBuilderRawPreview = (filename: string) =>
   API.get(`/api/config/builder/raw-preview/${encodeURIComponent(filename)}`);
 
-// `aliases` is the draft account_aliases map (mixed cell -> chosen primary), sent
-// so the preview reflects picks the user has already made — a resolved mixed cell
-// collapses to one account instead of counting as two.
+// `rows_span_accounts` is true when the recipe's per-row account field is a
+// COLUMN — i.e. rows belong to different accounts, so every account found needs
+// its own config. False means one account governs the whole statement.
 export const locateAccount = (
   storage_key: string, locator: AccountLocator, source?: object,
-  aliases?: Record<string, string>,
+  rows_span_accounts?: boolean,
 ) =>
-  API.post<LocateAccountResult>("/api/config/builder/locate-account", { storage_key, locator, source, aliases });
+  API.post<LocateAccountResult>("/api/config/builder/locate-account", { storage_key, locator, source, rows_span_accounts });
 
 export const testBuilderDraft = (storage_key: string, config_draft: object) =>
   API.post("/api/config/builder/test", { storage_key, config_draft });

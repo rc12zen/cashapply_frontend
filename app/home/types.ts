@@ -19,6 +19,11 @@ export interface FileInfo {
   business_unit: string;
   ou_number:     string;
   bank_account_id?: number | null;
+  // Matched config key. Present even when ingest_status="unrecognized" if the
+  // FORMAT matched and ingestion was refused only because some account in the
+  // file has no config yet (detector's INCOMPLETE_ACCOUNTS) — this is how the UI
+  // distinguishes "add the missing account" from "this format is unknown".
+  bank_config_key?:     string | null;
   // ── Duplicate detection / ingestion status (additive) ────────────────────
   source_file_id?:      number;
   ingest_status?:       "processing" | "ready" | "error" | "unrecognized" | null;
@@ -62,6 +67,31 @@ export interface AccountGroup {
  */
 export const isAccountRunnable = (g: AccountGroup): boolean =>
   g.bank_account_id != null && g.pending_row_count > 0;
+
+/**
+ * One uploaded STATEMENT, with every account its rows belong to.
+ *
+ * The Account Statements list is about files — a person uploads one file and
+ * expects one entry. Rendering files nested under accounts made a statement whose
+ * account-number column holds 6 accounts appear 6 times. Accounts are shown
+ * INSIDE the statement instead, which also matches how selection now works: a
+ * run is started with filenames and the orchestrator processes every account a
+ * file has rows for, so the accounts of one statement select together.
+ *
+ * `accounts` is empty while a file is still ingesting or has no config yet.
+ */
+export interface StatementGroup {
+  filename: string;
+  file: FileInfo;
+  accounts: AccountGroup[];
+  /** Account keys this statement covers — the unit of run selection. */
+  accountKeys: string[];
+  pending_row_count: number;
+}
+
+/** Runnable when any of its accounts is (see isAccountRunnable). */
+export const isStatementRunnable = (s: StatementGroup): boolean =>
+  s.accounts.some(isAccountRunnable);
 
 /**
  * PATCH: `groups` is the new, unambiguous taxonomy — same one used by
