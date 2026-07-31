@@ -171,12 +171,17 @@ export default function AccountStatementsCard({
                             <span
                               className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md"
                               title={
-                                (f.new_row_count ?? 0) > 0
-                                  ? `${f.new_row_count} new row(s) added${f.duplicate_row_count ? `, ${f.duplicate_row_count} already-seen row(s) skipped` : ""}`
-                                  : `No new rows — all ${f.duplicate_row_count ?? 0} row(s) were already ingested earlier`
+                                s.pending_row_count > 0
+                                  ? `${s.pending_row_count} row(s) still pending analysis` +
+                                    ((f.new_row_count ?? 0) > 0
+                                      ? ` (${f.new_row_count} new at ingest${f.duplicate_row_count ? `, ${f.duplicate_row_count} already-seen skipped` : ""})`
+                                      : "")
+                                  : lastConsumed != null
+                                    ? `All rows already processed in run #${lastConsumed}`
+                                    : `No pending rows — all ${f.duplicate_row_count ?? 0} row(s) were already ingested earlier`
                               }
                             >
-                              <CheckCircle2 size={9} /> {(f.new_row_count ?? 0) > 0 ? `Ready (${f.new_row_count} new)` : "Ready"}
+                              <CheckCircle2 size={9} /> {s.pending_row_count > 0 ? `Ready (${s.pending_row_count} pending)` : "Ready"}
                             </span>
                           ) : f.ingest_status === "error" ? (
                             // A real failure — a config DID match, something else broke
