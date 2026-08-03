@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import {deleteFile,
-  getAgingHistory, getAgingStatus, getFiles, getIngestStatus, getRunHistory,
+  getAgingHistory, getAgingStatus, getAiStatus, getFiles, getIngestStatus, getRunHistory,
   getPendingByAccount, getMe,
   getStatus, reingestStatement, selectAgingSource, startRun,
   uploadStatement,
@@ -29,7 +29,7 @@ import { isViewerRoles } from "@/lib/permissions";
 import { detectForFile } from "@/lib/configBuilderApi";
 import { getErrorMessage } from "@/lib/errorMessage";
 import ConfigBuilderWizard from "@/components/ConfigBuilderWizard";
-import AiStatusBadge from "./components/AiStatusBadge";
+import AiStatusBadge, { type AiStatus } from "./components/AiStatusBadge";
 import ConfigResolveDialog from "@/components/ConfigResolveDialog";
 
 import WelcomeHero from "./components/WelcomeHero";
@@ -44,6 +44,42 @@ import {
   isAccountRunnable,
 } from "./types";
 import { formatGreetingName } from "@/lib/formatName";
+
+// Human labels for the raw provider tokens the backend reports
+// (extraction/ai_providers.py's AI_PROVIDER values), so gate messages read
+// "Azure OpenAI" rather than "azure_openai".
+const AI_PROVIDER_LABELS: Record<string, string> = {
+  azure_openai: "Azure OpenAI",
+  openai: "OpenAI",
+  anthropic: "Anthropic (Claude)",
+};
+const prettyProvider = (p?: string | null): string =>
+  p ? AI_PROVIDER_LABELS[p] ?? p : "the AI provider";
+
+/**
+ * The single user-facing reason WHY the AI gate is blocking upload + analysis,
+ * derived from the status the backend returns (GET /api/config/ai-status →
+ * extraction/ai_providers.py). One place so the badge, the two upload/run
+ * cards, and the click-time abort notices all say the same, specific thing:
+ *   - status === null      → the status check itself didn't respond
+ *   - !configured          → no API key set for the active provider
+ *   - configured, !active  → key present but the provider isn't reachable
+ *                            (expired key, service outage, wrong deployment) —
+ *                            the backend's own error text is carried through.
+ * Never called when AI is active (aiReady true).
+ */
+function aiGateReason(status: AiStatus | null): string {
+  if (!status) {
+    return "Upload and analysis are paused — AI availability couldn't be verified (the status check didn't respond). Use “Recheck now” on the AI status badge, or contact an administrator if it persists.";
+  }
+  if (!status.configured) {
+    return `Upload and analysis are paused — no API key is configured for ${prettyProvider(status.provider)}. Ask an administrator to add a valid key before statements can be analysed.`;
+  }
+  // Configured but not reachable — status.message carries the provider's own
+  // error (e.g. expired/invalid key, network/service outage, wrong deployment
+  // name), which is exactly the specific reason to surface.
+  return `Upload and analysis are paused — ${status.message || `${prettyProvider(status.provider)} is configured but not reachable right now. Contact an administrator.`}`;
+}
 
 export default function Dashboard() {
   const router = useRouter();
@@ -115,6 +151,43 @@ export default function Dashboard() {
   // seconds"; this is informational and worth leaving up until dismissed.
   const [uploadNotice, setUploadNotice] = useState("");
   const [configNeededNotice, setConfigNeededNotice] = useState("");
+
+  // ── AI availability gate ────────────────────────────────────────────────
+  // Narrative extraction (Layer 2B — extraction/ai_providers.py) is what turns
+  // raw bank rows into identifiable detail. Business rule: if AI isn't actually
+  // reachable, we do NOT let a statement be uploaded or analysed at all (it
+  // would otherwise silently fall back to regex-only and leave rows
+  // unidentified). The backend already exposes GET /api/config/ai-status, which
+  // makes a real, cheap call to the active provider and returns `active` =
+  // "verified working right now". We own that status here (rather than inside
+  // AiStatusBadge) so the same source of truth both renders the badge AND
+  // gates the Upload / Start Analysis controls, and so the action handlers can
+  // force a fresh re-check at the moment of the click.
+  //
+  // FAIL-CLOSED: aiReady is true ONLY when the last check confirmed `active`.
+  // While the initial check is in flight, or if the status call itself failed,
+  // aiReady stays false and both actions are blocked.
+  const [aiStatus, setAiStatus]         = useState<AiStatus | null>(null);
+  const [aiLoading, setAiLoading]       = useState(true);
+  const [aiRechecking, setAiRechecking] = useState(false);
+  const aiReady = aiStatus?.active === true;
+  // Reason to show wherever the gate blocks (only meaningful when !aiReady).
+  const aiReason = aiReady ? "" : aiGateReason(aiStatus);
+
+  const fetchAiStatus = useCallback(async (force: boolean): Promise<AiStatus | null> => {
+    force ? setAiRechecking(true) : setAiLoading(true);
+    try {
+      const res = await getAiStatus(force);
+      setAiStatus(res.data);
+      return res.data as AiStatus;
+    } catch {
+      setAiStatus(null);   // null => "couldn't verify"; fail-closed keeps actions blocked
+      return null;
+    } finally {
+      setAiLoading(false);
+      setAiRechecking(false);
+    }
+  }, []);
 
   // PATCH: completion banner now reports the new taxonomy too.
   const [runCompletionSummary, setRunCompletionSummary] = useState<{
@@ -301,6 +374,7 @@ export default function Dashboard() {
       fetchPendingByAccount();
       fetchAgingHistory();
       fetchAgingStatus();
+      fetchAiStatus(false);   // seed the AI availability gate on load
       // PATCH: seed lastRunFiles from the most recent completed run so a page
       // refresh doesn't forget that these statements were already analyzed.
       try {
@@ -504,6 +578,13 @@ export default function Dashboard() {
   const handleStart = async () => {
     if (!agingStatus.loaded) { setError("Please load aging ledger data first."); return; }
     if (files.length === 0)  { setError("Upload at least one statement file first."); return; }
+    // AI gate — re-verify right before analysis. Narrative extraction can't run
+    // without a reachable provider; fail-closed if it's not confirmed active.
+    const aiSt = await fetchAiStatus(true);
+    if (!aiSt?.active) {
+      setError(aiGateReason(aiSt));
+      return;
+    }
     if (filesAlreadyAnalyzed) {
       setError("These statement(s) were already analyzed. Upload a new statement to run again.");
       return;
@@ -624,7 +705,20 @@ export default function Dashboard() {
 
   const handleStatementUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
+    // Reset the input so re-picking the same file later still fires onChange
+    // (matters when this upload is aborted by the AI gate below).
+    e.target.value = "";
     setStatementUploading(true); setError(""); setDuplicateUploadInfo(null); setConfigNeededNotice(""); setUploadNotice("");
+    // AI gate — re-verify at the moment of the click (not just the cached
+    // on-load status), so a provider that dropped since page load can't let a
+    // doomed upload through. Fail-closed: anything short of a confirmed
+    // `active` blocks the upload.
+    const st = await fetchAiStatus(true);
+    if (!st?.active) {
+      setStatementUploading(false);
+      setUploadNotice(aiGateReason(st));
+      return;
+    }
     try {
       const res = await uploadStatement(file);
       const data = res.data ?? {};
@@ -801,6 +895,8 @@ export default function Dashboard() {
 						statementInputRef={statementInputRef}
 						onStatementUpload={handleStatementUpload}
 						statementUploading={statementUploading}
+						aiReady={aiReady}
+						aiReason={aiReason}
 						statementGroups={statementGroups}
 						isStatementSelected={isStatementSelected}
 						toggleStatementSelected={toggleStatementSelected}
@@ -813,12 +909,19 @@ export default function Dashboard() {
 
 				{/* CONTROL BAR CARD */}
 				<div className="flex items-center justify-end -mb-1">
-					<AiStatusBadge />
+					<AiStatusBadge
+							status={aiStatus}
+							loading={aiLoading}
+							rechecking={aiRechecking}
+							onRecheck={() => fetchAiStatus(true)}
+						/>
 				</div>
 				<RunControlBar
 					isRunning={isRunning}
 					loading={loading}
-					filesAlreadyAnalyzed={filesAlreadyAnalyzed}
+					aiReady={aiReady}
+						aiReason={aiReason}
+						filesAlreadyAnalyzed={filesAlreadyAnalyzed}
 					lastRunId={lastRunId}
 					agingStatus={agingStatus}
 					files={files}

@@ -5,6 +5,13 @@ import { type AccountGroup, type FileInfo, isAccountRunnable } from "../types";
 interface RunControlBarProps {
   isRunning: boolean;
   loading: boolean;
+  /** AI (Layer 2B narrative extraction) confirmed reachable. When false,
+   *  analysis is blocked — the run would produce unidentified rows. See
+   *  app/home/page.tsx's AI gate. */
+  aiReady: boolean;
+  /** Specific reason the gate is blocking (why AI is unavailable). Shown when
+   *  !aiReady. Built by app/home/page.tsx's aiGateReason(). */
+  aiReason: string;
   filesAlreadyAnalyzed: boolean;
   lastRunId: number | null;
   agingStatus: { loaded: boolean };
@@ -22,7 +29,7 @@ interface RunControlBarProps {
  * self-contained component rather than split further.
  */
 export default function RunControlBar({
-  isRunning, loading, filesAlreadyAnalyzed, lastRunId, agingStatus, files,
+  isRunning, loading, aiReady, aiReason, filesAlreadyAnalyzed, lastRunId, agingStatus, files,
   accountGroups, isAccountSelected, elapsedSeconds, fmtElapsed, onStart,
 }: RunControlBarProps) {
   const selectedCount = accountGroups.filter((g) => isAccountSelected(g.key)).length;
@@ -83,6 +90,15 @@ export default function RunControlBar({
               <span className="font-black text-white text-sm tracking-widest bg-white/15 px-2.5 py-1 rounded-sm tabular-nums">
                 {fmtElapsed(elapsedSeconds)}
               </span>
+            </div>
+          ) : !aiReady ? (
+            <div>
+              <span className="font-bold text-sm tracking-wide text-amber-700">
+                AI extraction unavailable
+              </span>
+              <p className="text-[10px] text-amber-600 mt-0.5">
+                {aiReason}
+              </p>
             </div>
           ) : filesAlreadyAnalyzed ? (
             <div>
@@ -163,9 +179,10 @@ export default function RunControlBar({
       <button
         onClick={onStart}
         disabled={
-          isRunning || loading || files.length === 0 || !agingStatus.loaded || filesAlreadyAnalyzed ||
+          isRunning || loading || !aiReady || files.length === 0 || !agingStatus.loaded || filesAlreadyAnalyzed ||
           runnableSelectedCount === 0
         }
+        title={!aiReady ? aiReason : undefined}
         className={`w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 font-bold text-xs uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-xs whitespace-nowrap cursor-pointer rounded-xl
       ${
           !(isRunning || loading) && agingStatus.loaded && files.length > 0 && !filesAlreadyAnalyzed
