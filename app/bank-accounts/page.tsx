@@ -29,6 +29,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   getBankAccounts, getBusinessUnitOptions,
   updateBankAccountBusinessUnits, updateOrganizationUnit,
+  getSettlementIdentifiers, createNarrativeIdentifier, createProviderIdentifier,
+  deleteSettlementIdentifier,
 } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { usePageGuard } from "@/lib/usePageGuard";
@@ -38,6 +40,9 @@ import BankAccountsTable, { type BankAccountRow } from "@/components/bank-accoun
 import EditBusinessUnitsModal from "@/components/bank-accounts/EditBusinessUnitsModal";
 import OrganizationUnitsTable, { type OrganizationUnitRow } from "@/components/bank-accounts/OrganizationUnitsTable";
 import EditOrganizationUnitModal from "@/components/bank-accounts/EditOrganizationUnitModal";
+import SettlementIdentifiersCard, {
+  type SettlementIdentifiersGrouped,
+} from "@/components/bank-accounts/SettlementIdentifiersCard";
 import type { BusinessUnitOption } from "@/components/bank-accounts/BusinessUnitPicker";
 
 export default function AccountsAndOUsPage() {
@@ -46,6 +51,9 @@ export default function AccountsAndOUsPage() {
 
   const [accounts, setAccounts] = useState<BankAccountRow[]>([]);
   const [businessUnits, setBusinessUnits] = useState<BusinessUnitOption[]>([]);
+  const [settlementIdentifiers, setSettlementIdentifiers] = useState<SettlementIdentifiersGrouped>({
+    card_narrative: [], cheque_narrative: [], third_party_provider: [],
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -62,15 +70,49 @@ export default function AccountsAndOUsPage() {
     setLoading(true);
     setError("");
     try {
-      const [accountsRes, buRes] = await Promise.all([getBankAccounts(), getBusinessUnitOptions()]);
+      const [accountsRes, buRes, identifiersRes] = await Promise.all([
+        getBankAccounts(), getBusinessUnitOptions(), getSettlementIdentifiers(),
+      ]);
       setAccounts(accountsRes.data.accounts ?? []);
       setBusinessUnits(buRes.data.business_units ?? []);
+      setSettlementIdentifiers(
+        identifiersRes.data.identifiers ?? { card_narrative: [], cheque_narrative: [], third_party_provider: [] }
+      );
     } catch (e: any) {
       setError(getErrorMessage(e, "Could not load accounts & OUs."));
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const handleAddNarrativeIdentifier = async (
+    type: "card_narrative" | "cheque_narrative", pattern: string,
+  ) => {
+    try {
+      await createNarrativeIdentifier({ identifier_type: type, pattern });
+      await fetchAll();
+    } catch (e: any) {
+      setError(getErrorMessage(e, "Could not add that identifier."));
+    }
+  };
+
+  const handleAddProviderIdentifier = async (providerName: string, subCustomers: string[]) => {
+    try {
+      await createProviderIdentifier({ provider_name: providerName, sub_customers: subCustomers });
+      await fetchAll();
+    } catch (e: any) {
+      setError(getErrorMessage(e, "Could not add that provider."));
+    }
+  };
+
+  const handleDeleteIdentifier = async (id: number) => {
+    try {
+      await deleteSettlementIdentifier(id);
+      await fetchAll();
+    } catch (e: any) {
+      setError(getErrorMessage(e, "Could not delete that identifier."));
+    }
+  };
 
   useEffect(() => {
     if (allowed) fetchAll();
@@ -214,6 +256,30 @@ export default function AccountsAndOUsPage() {
             onEdit={(ou) => { setEditingOU(ou); setOuModalError(""); }}
           />
         )}
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-sm">
+        <div className="bg-gray-50 border-b border-gray-100 px-4 py-2.5">
+          <h2 className="text-xs font-black text-primary uppercase tracking-wider">Settlement Identifiers</h2>
+          <p className="text-[11px] text-gray-500 mt-0.5 font-medium">
+            Credit card / cheque narration patterns and registered third-party providers — how incoming bank rows get tagged for the Split &amp; Map flow.
+          </p>
+        </div>
+        <div className="p-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-8 text-gray-400">
+              <Loader2 size={16} className="animate-spin mr-2" /> Loading…
+            </div>
+          ) : (
+            <SettlementIdentifiersCard
+              identifiers={settlementIdentifiers}
+              canEdit={flags.canManageOU}
+              onAddNarrative={handleAddNarrativeIdentifier}
+              onAddProvider={handleAddProviderIdentifier}
+              onDelete={handleDeleteIdentifier}
+            />
+          )}
+        </div>
       </div>
 
       {editingAccount && (

@@ -11,6 +11,10 @@
 const STATE_STYLES: Record<string, string> = {
   unidentified:             "bg-gray-100 text-gray-600",
   needs_remittance:         "bg-sky-100 text-sky-800",
+  // NEW: R16/R17/R18 — deliberately its own color, not reused from
+  // conflict_exception/needs_remittance, since nothing is wrong with these
+  // rows — they're just waiting on a Split & Map breakdown.
+  needs_distribution:       "bg-indigo-100 text-indigo-800",
   conflict_exception:       "bg-red-100 text-red-800",
   acceptable_short_payment: "bg-amber-100 text-amber-800",
   ready_to_post:            "bg-emerald-100 text-emerald-800",
@@ -44,6 +48,13 @@ const REASON_LABELS: Record<string, string> = {
   FX_RATE_MISSING:            "FX Rate Missing",
   WRONG_OU_SPLIT_REQUIRED:    "Wrong OU — Split Required",
   UNCLASSIFIED:               "Unclassified",
+  // NEW — see rule_engine/evaluator.py's R16/R17/R18.
+  CARD_SETTLEMENT_DETECTED:          "Credit Card Settlement",
+  CHEQUE_SETTLEMENT_DETECTED:        "Cheque Settlement",
+  THIRD_PARTY_PROVIDER_DETECTED:     "Third-Party Provider",
+  // NEW — see hitl/manual_mapping.py's R9d and rule_engine/state_machine.py's R19.
+  SHORT_PAYMENT_RECORDED:            "Short Payment — Recorded",
+  INVOICE_ALREADY_APPLIED:           "Invoice Already Applied (Duplicate)",
 }
 
 export default function ReasonBadge({

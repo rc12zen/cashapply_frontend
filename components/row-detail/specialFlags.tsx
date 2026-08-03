@@ -10,7 +10,7 @@
  *
  * A .tsx file (not .ts) because the flag definitions carry JSX icons.
  */
-import { AlertTriangle, ArrowRightLeft, GitBranch, Layers } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, GitBranch, Layers, CreditCard, Mail, Users } from "lucide-react";
 import { RowDetail } from "@/components/row-detail/types";
 
 export interface SpecialFlag {
@@ -64,14 +64,48 @@ export function deriveSpecialFlags(detail: RowDetail): SpecialFlag[] {
   const { isCrossCurrency, isCrossLedger, isCrossOU } = deriveCrossFlags(detail);
 
   const isAcceptableShort = ex.row_type === "ACCEPTABLE_SHORT_PAYMENT";
+  // NEW — see hitl/manual_mapping.py's R9d. A shortfall beyond the
+  // auto-tolerance, manually confirmed by a SPOC as genuine (not an
+  // overpayment) rather than left unmapped in conflict_exception.
+  const isShortPaymentRecorded = ex.row_type === "SHORT_PAYMENT_RECORDED";
 
   const flags: SpecialFlag[] = [];
+
+  // NEW: R16/R17/R18 — settlement identity. These fire INSTEAD OF the usual
+  // rule badges (no invoice mapping exists yet on these rows — see
+  // rule_engine/evaluator.py's docstring on why they short-circuit before
+  // R0), so they're checked first and unconditionally, not gated behind
+  // isAcceptableShort/isCrossCurrency/etc like the flags below.
+  if (detail.settlement_type === "card_narrative") flags.push({
+    label: "Credit Card Settlement",
+    desc:  "This bank line matches the credit card settlement narration pattern — it's a consolidated batch covering several customers. Use Split & Map to break it into individual customer/invoice receipts.",
+    bg: "bg-blue-50", border: "border-blue-300", text: "text-blue-800",
+    icon: <CreditCard size={14} className="text-blue-500 shrink-0 mt-0.5" />,
+  });
+  if (detail.settlement_type === "cheque_narrative") flags.push({
+    label: "Cheque Settlement",
+    desc:  "This bank line matches the cheque-deposit narration pattern — it's a consolidated batch covering one or more customers. Use Split & Map once the scanned-cheque email is available.",
+    bg: "bg-teal-50", border: "border-teal-300", text: "text-teal-800",
+    icon: <Mail size={14} className="text-teal-500 shrink-0 mt-0.5" />,
+  });
+  if (detail.settlement_type === "third_party_provider") flags.push({
+    label: "Third-Party Provider",
+    desc:  `Received from ${detail.settlement_provider || "a registered third-party provider"}, paying on behalf of its own customers. No receipt has been created — enter the payment distribution to split it across the right customers/invoices.`,
+    bg: "bg-purple-50", border: "border-purple-300", text: "text-purple-800",
+    icon: <Users size={14} className="text-purple-500 shrink-0 mt-0.5" />,
+  });
 
   if (isAcceptableShort) flags.push({
     label: "Acceptable Short Payment",
     desc:  "This payment is below the invoice outstanding but falls within the accepted tolerance. Posting is permitted without further action.",
     bg: "bg-amber-50", border: "border-amber-300", text: "text-amber-800",
     icon: <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" />,
+  });
+  if (isShortPaymentRecorded) flags.push({
+    label: "Short Payment — Recorded",
+    desc:  "This shortfall exceeds the auto-tolerance, but was manually confirmed against the selected invoice(s) as a genuine short payment. Posting is permitted; the remaining balance stays open for collections.",
+    bg: "bg-orange-50", border: "border-orange-300", text: "text-orange-800",
+    icon: <AlertTriangle size={14} className="text-orange-500 shrink-0 mt-0.5" />,
   });
   if (isCrossCurrency) flags.push({
     label: "Invoice currency != Credited Currency",
