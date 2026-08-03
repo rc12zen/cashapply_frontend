@@ -379,6 +379,16 @@ export const purgeSystemLogs  = () => API.delete("/api/activity-log/purge-system
 export const getPendingHitl     = ()                             => API.get("/api/hitl/pending");
 export const getApprovalPreview = (id: number)                   => API.get(`/api/hitl/preview/${id}`);
 export const rejectEntry        = (id: number, comment?: string) => API.post(`/api/hitl/reject/${id}`, { comment });
+// Unidentified rows only — see hitl/service.py's mark_eligible_for_receipt()
+// / discard_row(). markEligible creates the bare Oracle receipt now (held
+// back automatically by Step 4.5 for unidentified rows); discardEntry moves
+// the row to its own "Discarded" state without ever creating one.
+export const markEligible        = (id: number)                   => API.post(`/api/hitl/mark-eligible/${id}`, {});
+export const discardEntry        = (id: number, comment?: string) => API.post(`/api/hitl/discard/${id}`, { comment });
+// Cross-ledger-currency rows only, before invoice mapping — see
+// hitl/service.py's edit_gl_rate() for the guard.
+export const editGlRate          = (id: number, newRate: number, reason?: string) =>
+  API.put(`/api/hitl/gl-rate/${id}`, { new_rate: newRate, reason });
 export const approveBulk        = (ids: number[])                => API.post("/api/hitl/approve-bulk", { ids });
 export const getHitlHistory     = ()                             => API.get("/api/hitl/history");
 export const retryOracle        = (id: number)                   => API.post(`/api/hitl/retry-oracle/${id}`, {});

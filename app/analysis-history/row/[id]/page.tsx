@@ -61,7 +61,7 @@
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance } from "@/lib/api";
+import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate } from "@/lib/api";
 
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
@@ -77,6 +77,7 @@ import ManualInvoiceMappingCard from "@/components/row-detail/ManualInvoiceMappi
 import AgingSnapshotCard from "@/components/row-detail/AgingSnapshotCard";
 import WhyStatusCard from "@/components/row-detail/WhyStatusCard";
 import OracleFusionCard from "@/components/row-detail/OracleFusionCard";
+import EditGlRateModal from "@/components/row-detail/EditGlRateModal";
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,37 @@ export default function RowDetailPage() {
     setActionLoading(false);
   };
 
+  const handleMarkEligible = async () => {
+    if (!detail) return;
+    setActionLoading(true); setActionError("");
+    try { await markEligible(recordId); await fetchDetail(); }
+    catch (e: any) { setActionError(formatApiError(e, "Could not mark this row eligible.")); }
+    setActionLoading(false);
+  };
+
+  const handleDiscard = async () => {
+    if (!detail) return;
+    const comment = window.prompt("Reason for discarding this row (optional):") || undefined;
+    setActionLoading(true); setActionError("");
+    try { await discardEntry(recordId, comment); await fetchDetail(); }
+    catch (e: any) { setActionError(formatApiError(e, "Could not discard this row.")); }
+    setActionLoading(false);
+  };
+
+  const [glRateModalOpen, setGlRateModalOpen] = useState(false);
+  const [glRateSaving, setGlRateSaving] = useState(false);
+  const [glRateError, setGlRateError] = useState("");
+
+  const handleEditGlRate = async (data: { new_rate: number; reason: string }) => {
+    setGlRateSaving(true); setGlRateError("");
+    try {
+      await editGlRate(recordId, data.new_rate, data.reason || undefined);
+      setGlRateModalOpen(false);
+      await fetchDetail();
+    } catch (e: any) { setGlRateError(formatApiError(e, "Could not update the GL rate.")); }
+    setGlRateSaving(false);
+  };
+
   // Manual counterpart to the periodic remittance_recheck_worker — lets a
   // SPOC re-check THIS row on demand ("the customer just told me they
   // sent it") instead of waiting for the next scheduled sweep. Only ever
@@ -173,6 +205,9 @@ export default function RowDetailPage() {
       else if (code === "reject") await handleReject();
       else if (code === "retry_oracle") await handleRetry();
       else if (code === "recheck_remittance") await handleRecheckRemittance();
+      else if (code === "mark_eligible") await handleMarkEligible();
+      else if (code === "discard") await handleDiscard();
+      else if (code === "edit_gl_rate") setGlRateModalOpen(true);
       else if (code === "map_invoice") {
         document.getElementById("manual-mapping-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }
@@ -318,6 +353,17 @@ export default function RowDetailPage() {
           onToggle={() => setRemittanceCollapsed(v => !v)}
         />
       </div>
+
+      {glRateModalOpen && (
+        <EditGlRateModal
+          currentRate={oracle.payload?.ConversionRate ?? null}
+          standardReceiptId={oracle.standard_receipt_id}
+          saving={glRateSaving}
+          error={glRateError}
+          onCancel={() => { setGlRateModalOpen(false); setGlRateError(""); }}
+          onSubmit={handleEditGlRate}
+        />
+      )}
     </div>
   );
 }

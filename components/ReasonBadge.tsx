@@ -22,6 +22,10 @@ const STATE_STYLES: Record<string, string> = {
   processed:                "bg-emerald-100 text-emerald-800",
   rejected:                 "bg-red-100 text-red-800",
   post_failed:              "bg-red-100 text-red-800",
+  // NEW — see hitl/service.py's discard_row(). Neutral gray, not red like
+  // rejected: nothing went wrong, a SPOC just judged this row was never a
+  // real receivable transaction.
+  discarded:                "bg-gray-100 text-gray-600",
 }
 
 const REASON_LABELS: Record<string, string> = {
