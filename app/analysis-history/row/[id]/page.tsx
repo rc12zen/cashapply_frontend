@@ -61,7 +61,7 @@
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate } from "@/lib/api";
+import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, settlementOverride } from "@/lib/api";
 
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
@@ -159,6 +159,14 @@ export default function RowDetailPage() {
     setActionLoading(false);
   };
 
+  const handleSettlementOverride = async () => {
+    if (!detail) return;
+    setActionLoading(true); setActionError("");
+    try { await settlementOverride(recordId); await fetchDetail(); }
+    catch (e: any) { setActionError(formatApiError(e, "Could not move this row to the customer-payment bucket.")); }
+    setActionLoading(false);
+  };
+
   const [glRateModalOpen, setGlRateModalOpen] = useState(false);
   const [glRateSaving, setGlRateSaving] = useState(false);
   const [glRateError, setGlRateError] = useState("");
@@ -207,6 +215,7 @@ export default function RowDetailPage() {
       else if (code === "recheck_remittance") await handleRecheckRemittance();
       else if (code === "mark_eligible") await handleMarkEligible();
       else if (code === "discard") await handleDiscard();
+      else if (code === "settlement_override") await handleSettlementOverride();
       else if (code === "edit_gl_rate") setGlRateModalOpen(true);
       else if (code === "map_invoice") {
         document.getElementById("manual-mapping-card")?.scrollIntoView({ behavior: "smooth", block: "start" });

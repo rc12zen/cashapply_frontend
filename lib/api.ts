@@ -107,6 +107,9 @@ export const updateOrganizationUnit = (
 // Row identity for the three consolidated-settlement types -- see
 // bff/settlement_identifier_routes.py and bank_statement/settlement_identifier.py.
 export const getSettlementIdentifiers = () => API.get("/api/bank-accounts/settlement-identifiers");
+// Sourced from the SAME loaded aging report every other customer picker in
+// this app uses — not hand-typed. See bff/settlement_identifier_routes.py.
+export const getAgingCustomersForProviders = () => API.get("/api/bank-accounts/settlement-identifiers/aging-customers");
 export const createNarrativeIdentifier = (
 	payload: { identifier_type: "card_narrative" | "cheque_narrative"; pattern: string },
 ) => API.post("/api/bank-accounts/settlement-identifiers/narrative", payload);
@@ -385,6 +388,10 @@ export const rejectEntry        = (id: number, comment?: string) => API.post(`/a
 // the row to its own "Discarded" state without ever creating one.
 export const markEligible        = (id: number)                   => API.post(`/api/hitl/mark-eligible/${id}`, {});
 export const discardEntry        = (id: number, comment?: string) => API.post(`/api/hitl/discard/${id}`, { comment });
+// Needs Distribution rows only — see hitl/service.py's
+// override_settlement_as_customer_payment(). Moves the row out of the
+// broker/card/cheque bucket into the standard Manual Invoice Mapping flow.
+export const settlementOverride  = (id: number)                   => API.post(`/api/hitl/settlement-override/${id}`, {});
 // Cross-ledger-currency rows only, before invoice mapping — see
 // hitl/service.py's edit_gl_rate() for the guard.
 export const editGlRate          = (id: number, newRate: number, reason?: string) =>

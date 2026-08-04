@@ -54,6 +54,16 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
   // place enforcing it -- worth confirming the backend also refuses it).
   const canManuallyMap = detail.category !== "ready_for_oracle"
     && detail.category !== "processed"
+    // NEW: a Needs Distribution row (credit card / cheque / third-party —
+    // see specialFlags.tsx's badges) is a CONSOLIDATED multi-customer bank
+    // line by design — single-customer Manual Invoice Mapping doesn't
+    // make sense on it until a SPOC explicitly says "treat this one as a
+    // direct customer payment instead" (settlement_override_at set — see
+    // hitl/service.py's override_settlement_as_customer_payment()). Once
+    // overridden, the row's category itself falls back to "unidentified"
+    // server-side (bff/metrics.py's _category_for_row), so this condition
+    // naturally stops excluding it — no separate override flag needed here.
+    && detail.category !== "needs_distribution"
     && !detail.manually_mapped
     && !detail.oracle?.hitl_status;
 

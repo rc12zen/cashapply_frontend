@@ -19,8 +19,10 @@
  * showing that difference plainly beats forcing one flexible-but-vague
  * form.
  */
-import { useState } from "react";
-import { CreditCard, Mail, Users, Plus, Trash2, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CreditCard, Mail, Users, Plus, Trash2, Loader2, X } from "lucide-react";
+import SearchableSelect from "@/components/row-detail/SearchableSelect";
+import { getAgingCustomersForProviders } from "@/lib/api";
 
 export interface SettlementIdentifierRow {
   id: number;
@@ -76,9 +78,28 @@ export default function SettlementIdentifiersCard({
   const [cardPattern, setCardPattern] = useState("");
   const [chequePattern, setChequePattern] = useState("");
   const [providerName, setProviderName] = useState("");
-  const [subCustomers, setSubCustomers] = useState("");
+  // PATCH: was a free-typed comma-separated string. Now sourced from the
+  // SAME loaded aging report every other customer picker in this app
+  // uses — a typo here used to silently produce a customer name that
+  // would never match a real aging customer later at classification/
+  // mapping time. selectedCustomers holds the ones already added for this
+  // provider (as chips); customerToAdd is the SearchableSelect's own
+  // "pick one to add next" value, cleared right after each add.
+  const [agingCustomerOptions, setAgingCustomerOptions] = useState<string[]>([]);
+  const [agingCustomersError, setAgingCustomersError] = useState("");
+  const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
+  const [customerToAdd, setCustomerToAdd] = useState("");
   const [saving, setSaving] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    getAgingCustomersForProviders()
+      .then((res) => {
+        if (res.data.error) setAgingCustomersError(res.data.error);
+        setAgingCustomerOptions(res.data.customers || []);
+      })
+      .catch(() => setAgingCustomersError("Could not load the customer list from the aging report."));
+  }, []);
 
   const submitCard = async () => {
     if (!cardPattern.trim()) return;
@@ -92,15 +113,19 @@ export default function SettlementIdentifiersCard({
     try { await onAddNarrative("cheque_narrative", chequePattern.trim()); setChequePattern(""); }
     finally { setSaving(null); }
   };
+  const addCustomerToSelection = (name: string) => {
+    if (name && !selectedCustomers.includes(name)) setSelectedCustomers((prev) => [...prev, name]);
+    setCustomerToAdd("");
+  };
+  const removeCustomerFromSelection = (name: string) => {
+    setSelectedCustomers((prev) => prev.filter((c) => c !== name));
+  };
   const submitProvider = async () => {
-    if (!providerName.trim()) return;
+    if (!providerName.trim() || selectedCustomers.length === 0) return;
     setSaving("provider");
     try {
-      await onAddProvider(
-        providerName.trim(),
-        subCustomers.split(",").map((c) => c.trim()).filter(Boolean),
-      );
-      setProviderName(""); setSubCustomers("");
+      await onAddProvider(providerName.trim(), selectedCustomers);
+      setProviderName(""); setSelectedCustomers([]);
     } finally { setSaving(null); }
   };
   const remove = async (id: number) => {
@@ -223,15 +248,36 @@ export default function SettlementIdentifiersCard({
               placeholder="Provider name, e.g. Accurant"
               className="w-full text-xs px-2 py-1.5 border border-gray-200 rounded-sm"
             />
-            <input
-              value={subCustomers}
-              onChange={(e) => setSubCustomers(e.target.value)}
-              placeholder="Customers, comma-separated: SITA, Kig, Lament"
-              className="w-full text-xs px-2 py-1.5 border border-gray-200 rounded-sm"
+
+            {/* PATCH: was a free-typed comma-separated field — now sourced
+                from the loaded aging report, same list every other
+                customer picker in this app uses, so a name here is
+                guaranteed to match a real aging customer later. */}
+            <SearchableSelect
+              value={customerToAdd}
+              onChange={addCustomerToSelection}
+              options={agingCustomerOptions.filter((c) => !selectedCustomers.includes(c))}
+              placeholder="+ add a customer…"
+              searchPlaceholder="Search aging customers…"
+              emptyMessage={agingCustomersError || "No customer matches your search."}
             />
+
+            {selectedCustomers.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {selectedCustomers.map((c) => (
+                  <span key={c} className="inline-flex items-center gap-1 text-[11px] font-semibold bg-purple-50 border border-purple-200 text-purple-800 rounded-sm px-2 py-1">
+                    {c}
+                    <button onClick={() => removeCustomerFromSelection(c)} className="text-purple-400 hover:text-purple-700 cursor-pointer">
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
             <button
               onClick={submitProvider}
-              disabled={saving === "provider"}
+              disabled={saving === "provider" || !providerName.trim() || selectedCustomers.length === 0}
               className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-purple-600 text-white rounded-sm disabled:opacity-50 text-xs font-bold"
             >
               {saving === "provider" ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
