@@ -15,12 +15,16 @@
  * badge and the disabled controls always agree on one source of truth. This
  * component only renders what it's handed and asks the parent to re-check.
  */
-import { AlertTriangle, CheckCircle2, HelpCircle, Loader2, RefreshCw, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, HelpCircle, Loader2, PowerOff, RefreshCw, XCircle } from "lucide-react";
 import { useState } from "react";
 
 export interface AiStatus {
   provider: string;
   model: string | null;
+  // false = AI extraction is intentionally turned OFF via .env
+  // (AI_EXTRACTION_ENABLED=false), a neutral local-dev state, NOT an outage.
+  // The gate treats this as "allowed" (upload/analyse proceed regex-only).
+  enabled: boolean;
   configured: boolean;
   active: boolean;
   message: string;
@@ -77,7 +81,9 @@ export default function AiStatusBadge({ status, loading, rechecking, onRecheck }
     );
   }
 
-  const tone = status.active
+  const tone = status.enabled === false
+    ? { icon: PowerOff, classes: "bg-slate-100 text-slate-600 border-slate-300", label: "AI Extraction Off" }
+    : status.active
     ? { icon: CheckCircle2, classes: "bg-emerald-50 text-emerald-700 border-emerald-200", label: "AI Extraction Active" }
     : status.configured
     ? { icon: AlertTriangle, classes: "bg-amber-50 text-amber-700 border-amber-200", label: "AI Extraction Unavailable" }

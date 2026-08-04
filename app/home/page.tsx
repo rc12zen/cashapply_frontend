@@ -81,6 +81,17 @@ function aiGateReason(status: AiStatus | null): string {
   return `Upload and analysis are paused — ${status.message || `${prettyProvider(status.provider)} is configured but not reachable right now. Contact an administrator.`}`;
 }
 
+/**
+ * Whether the AI gate PASSES (upload + analyse allowed). True when AI is
+ * intentionally turned OFF via .env (enabled === false → regex-only local mode,
+ * so we DON'T block) OR the provider is confirmed active. A null status (check
+ * failed) or a configured-but-unreachable provider stays BLOCKED — fail-closed,
+ * per the outage policy. aiGateReason() only ever runs when this returns false.
+ */
+function aiGatePasses(status: AiStatus | null): boolean {
+  return !!status && (status.enabled === false || status.active === true);
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const [files, setFiles]             = useState<FileInfo[]>([]);
@@ -170,7 +181,9 @@ export default function Dashboard() {
   const [aiStatus, setAiStatus]         = useState<AiStatus | null>(null);
   const [aiLoading, setAiLoading]       = useState(true);
   const [aiRechecking, setAiRechecking] = useState(false);
-  const aiReady = aiStatus?.active === true;
+  // Gate PASSES when AI is confirmed active OR intentionally disabled via .env
+  // (regex-only local mode). Fail-closed otherwise. See aiGatePasses().
+  const aiReady = aiGatePasses(aiStatus);
   // Reason to show wherever the gate blocks (only meaningful when !aiReady).
   const aiReason = aiReady ? "" : aiGateReason(aiStatus);
 
@@ -578,10 +591,10 @@ export default function Dashboard() {
   const handleStart = async () => {
     if (!agingStatus.loaded) { setError("Please load aging ledger data first."); return; }
     if (files.length === 0)  { setError("Upload at least one statement file first."); return; }
-    // AI gate — re-verify right before analysis. Narrative extraction can't run
-    // without a reachable provider; fail-closed if it's not confirmed active.
+    // AI gate — re-verify right before analysis. Blocked unless the provider is
+    // confirmed active OR AI is intentionally disabled via .env (regex-only).
     const aiSt = await fetchAiStatus(true);
-    if (!aiSt?.active) {
+    if (!aiGatePasses(aiSt)) {
       setError(aiGateReason(aiSt));
       return;
     }
@@ -711,10 +724,10 @@ export default function Dashboard() {
     setStatementUploading(true); setError(""); setDuplicateUploadInfo(null); setConfigNeededNotice(""); setUploadNotice("");
     // AI gate — re-verify at the moment of the click (not just the cached
     // on-load status), so a provider that dropped since page load can't let a
-    // doomed upload through. Fail-closed: anything short of a confirmed
-    // `active` blocks the upload.
+    // doomed upload through. Fail-closed, EXCEPT when AI is intentionally
+    // disabled via .env (regex-only local mode), which is allowed.
     const st = await fetchAiStatus(true);
-    if (!st?.active) {
+    if (!aiGatePasses(st)) {
       setStatementUploading(false);
       setUploadNotice(aiGateReason(st));
       return;
