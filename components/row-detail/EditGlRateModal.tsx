@@ -49,14 +49,23 @@ export default function EditGlRateModal({
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           <div className="text-[11px] text-gray-500 font-medium">
-            Oracle receipt <span className="font-mono font-bold text-primary">{standardReceiptId || "—"}</span>
+            {standardReceiptId ? (
+              <>Oracle receipt <span className="font-mono font-bold text-primary">{standardReceiptId}</span></>
+            ) : (
+              <>No Oracle receipt exists yet for this row — receipt creation previously failed.</>
+            )}
           </div>
 
           <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-sm px-3 py-2">
             <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
             <p className="text-[11px] text-amber-800 font-medium leading-relaxed">
-              This directly PATCHes the receipt already created in Oracle. Only allowed before
-              invoice mapping exists on it — once mapped, this needs a reverse-and-recreate correction instead.
+              {standardReceiptId ? (
+                <>This directly PATCHes the receipt already created in Oracle. Only allowed before
+                invoice mapping exists on it — once mapped, this needs a reverse-and-recreate correction instead.</>
+              ) : (
+                <>This sets the corrected rate and RETRIES receipt creation from scratch (a fresh POST to
+                Oracle) — the wrong rate may well be why creation failed in the first place.</>
+              )}
             </p>
           </div>
 
