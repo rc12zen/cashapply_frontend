@@ -77,6 +77,13 @@ export interface RowDetail {
   manually_mapped?:    boolean;
   manually_mapped_at?: string | null;
   manually_mapped_by?: string | null;
+  // NEW: row identity for the three consolidated-settlement types (credit
+  // card batch / cheque batch / third-party provider payment). Backend:
+  // LineItem.settlement_type / settlement_provider (see db/models.py),
+  // set only by rule_engine/evaluator.py's R16/R17/R18. settlement_provider
+  // is only ever populated when settlement_type === "third_party_provider".
+  settlement_type?:     "card_narrative" | "cheque_narrative" | "third_party_provider" | null;
+  settlement_provider?: string | null;
   bank_statement: {
     bank_name:           string;
     statement_date:      string | null;

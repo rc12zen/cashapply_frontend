@@ -103,6 +103,21 @@ export const updateOrganizationUnit = (
 	payload: { ou_name: string; functional_currency: string },
 ) => API.put(`/api/bank-accounts/business-units/${encodeURIComponent(ouNumber)}`, payload);
 
+// ── Settlement Identifiers (credit card / cheque / third-party provider) ──────
+// Row identity for the three consolidated-settlement types -- see
+// bff/settlement_identifier_routes.py and bank_statement/settlement_identifier.py.
+export const getSettlementIdentifiers = () => API.get("/api/bank-accounts/settlement-identifiers");
+export const createNarrativeIdentifier = (
+	payload: { identifier_type: "card_narrative" | "cheque_narrative"; pattern: string },
+) => API.post("/api/bank-accounts/settlement-identifiers/narrative", payload);
+export const createProviderIdentifier = (
+	payload: { provider_name: string; sub_customers: string[] },
+) => API.post("/api/bank-accounts/settlement-identifiers/third-party-provider", payload);
+export const setSettlementIdentifierActive = (id: number, active: boolean) =>
+	API.put(`/api/bank-accounts/settlement-identifiers/${id}`, { active });
+export const deleteSettlementIdentifier = (id: number) =>
+	API.delete(`/api/bank-accounts/settlement-identifiers/${id}`);
+
 // ── Run ───────────────────────────────────────────────────────────────────────
 export const getFiles        = ()                         => API.get("/api/run/files");
 
