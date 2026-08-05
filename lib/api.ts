@@ -133,6 +133,22 @@ export const getFiles        = ()                         => API.get("/api/run/f
  * run behavior.
  */
 export const getPendingByAccount = () => API.get("/api/run/pending-by-account");
+/**
+ * Everything the Confirm Analysis Run dialog reviews before an IRREVERSIBLE
+ * run: per-account Business Unit / functional currency / credit rule, plus
+ * the global run context (aging report, AI availability, settlement
+ * identifiers, tolerances) and a computed blockers/warnings split. Blockers
+ * mirror what POST /api/run/start itself rejects, so this is a preview of a
+ * real refusal rather than a second opinion. See bff/run_routes.py's
+ * /preflight.
+ */
+export const getRunPreflight = (selectedFiles: string[]) =>
+  API.get("/api/run/preflight", {
+    params: { selected_files: selectedFiles },
+    // Repeated `selected_files=a&selected_files=b`, which is what FastAPI's
+    // list[str] Query expects — axios's default would send `selected_files[]`.
+    paramsSerializer: { indexes: null },
+  });
 export const startRun        = (selectedFiles: string[])  => API.post("/api/run/start", { selected_files: selectedFiles });
 export const getStatus       = ()                         => API.get("/api/run/status");
 export const resetRun        = ()                         => API.post("/api/run/reset");
