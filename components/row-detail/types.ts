@@ -84,6 +84,50 @@ export interface RowDetail {
   // is only ever populated when settlement_type === "third_party_provider".
   settlement_type?:     "card_narrative" | "cheque_narrative" | "third_party_provider" | null;
   settlement_provider?: string | null;
+  // NEW: for a "distributed" parent row only (see hitl/split_and_map.py's
+  // confirm_distribution() and hitl/distribution_actions.py) -- the
+  // per-invoice breakdown, with each entry's own Oracle receipt/reference/
+  // GL-rate state. No separate child rows exist; every action (Approve &
+  // Post / Reject / Edit GL Rate) happens inline against one of these
+  // entries. null for every other category.
+  distribution_breakdown?: {
+    entry_id: string;
+    customer_name: string | null;
+    customer_match_pct: number | null;
+    invoice_number: string | null;
+    currency: string | null;
+    amount: number | null;
+    invoice_currency: string | null;
+    is_cross_currency: boolean;
+    fx_credit_to_invoice: number | null;
+    fx_credit_to_invoice_source: string | null;
+    is_cross_ledger: boolean;
+    fx_invoice_to_functional: number | null;
+    fx_invoice_to_functional_source: string | null;
+    is_cross_ou_currency: boolean;
+    ou_evidence: OuEvidence | null;
+    target_total: number | null;
+    shortfall_pct: number | null;
+    rule_id: string | null;
+    reason_code: string | null;
+    passed_validation: boolean;
+    hitl_status: "pending" | "approved" | "rejected";
+    oracle_post_status: "success" | "failed" | null;
+    oracle_ref_no: string | null;
+    standard_receipt_id: string | null;
+    oracle_status_code: string | null;
+    post_message: string | null;
+    oracle_posted_at: string | null;
+    oracle_payload: Record<string, any> | null;
+    reference_status: "success" | "failed" | null;
+    reference_message: string | null;
+    gl_rate_original: number | null;
+    gl_rate_edited_at: string | null;
+    gl_rate_edited_by: string | null;
+    rejected_at: string | null;
+    rejected_by: string | null;
+    rejected_reason: string | null;
+  }[] | null;
   bank_statement: {
     bank_name:           string;
     statement_date:      string | null;

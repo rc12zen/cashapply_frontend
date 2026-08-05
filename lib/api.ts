@@ -398,6 +398,14 @@ export const previewDistribution    = (id: number, entries: any[]) => API.post(`
 export const confirmDistribution    = (id: number, entries: any[]) => API.post(`/api/hitl/distribution-confirm/${id}`, { entries });
 export const getActiveInvoicesForCustomer = (id: number, customerName: string) =>
   API.get(`/api/hitl/distribution-customer-invoices/${id}`, { params: { customer_name: customerName } });
+// Per-entry actions on a distributed parent's distribution_breakdown --
+// no child rows, see hitl/distribution_actions.py.
+export const approveDistributionEntry = (id: number, entryId: string, comment?: string) =>
+  API.post(`/api/hitl/distribution-entry-approve/${id}/${entryId}`, { comment });
+export const rejectDistributionEntry  = (id: number, entryId: string, comment?: string) =>
+  API.post(`/api/hitl/distribution-entry-reject/${id}/${entryId}`, { comment });
+export const editDistributionEntryGlRate = (id: number, entryId: string, newRate: number, reason?: string) =>
+  API.put(`/api/hitl/distribution-entry-gl-rate/${id}/${entryId}`, { new_rate: newRate, reason });
 // Cross-ledger-currency rows only, before invoice mapping — see
 // hitl/service.py's edit_gl_rate() for the guard.
 export const editGlRate          = (id: number, newRate: number, reason?: string) =>

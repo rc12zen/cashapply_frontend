@@ -8,35 +8,44 @@
  * Customer Payment" action for that case instead).
  *
  * Design (confirmed choices):
- *   - Each customer's share is a FIXED AMOUNT, not a percentage.
+ *   - PATCH: amount is now entered PER INVOICE, not per customer. A
+ *     customer with two invoices selected gets two amount boxes, one per
+ *     invoice — each is classified (R9a/R9b/R9d/overpayment) independently,
+ *     so one invoice can land as an exact match while another under the
+ *     same customer lands as a short payment. See hitl/split_and_map.py's
+ *     _resolve_entry() for the matching backend shape.
  *   - The breakup must sum to EXACTLY the credited amount before Confirm
- *     is allowed.
+ *     is allowed — now summed across every invoice of every customer.
  *   - Every customer needs at least one ACTIVE invoice selected — picked
  *     from a live list fetched the moment a customer is chosen (only
  *     invoices with real remaining balance are offered at all).
- *   - Each customer's amount gets tagged (R9a/R9b/R9d) the SAME way the
- *     rest of the app tags "amount vs. invoice" everywhere else — see
- *     hitl/split_and_map.py's _resolve_entry().
- *   - One receipt gets created PER CUSTOMER on confirm — each then needs
+ *   - One receipt gets created PER INVOICE on confirm — each then needs
  *     its own Approve & Post afterward, same as any other row.
  */
 import { useEffect, useState } from "react";
 import { Plus, Trash2, Loader2, AlertTriangle, CheckCircle2, Split, Check } from "lucide-react";
 import SearchableSelect from "@/components/row-detail/SearchableSelect";
 import { getDistributionContext, confirmDistribution, getActiveInvoicesForCustomer } from "@/lib/api";
+import { getErrorMessage } from "@/lib/errorMessage";
 
 interface ActiveInvoice { invoice_number: string; outstanding_amount: number; currency: string }
 
+interface SelectedInvoice {
+  invoice_number: string;
+  amount: string;                     // kept as a string while editing; parsed on submit
+  outstanding_amount: number;         // shown as a hint next to the amount box, not auto-filled
+  currency: string;
+}
+
 interface DistributionEntry {
   customer_name: string;
-  amount: string;                     // kept as a string while editing; parsed on submit
-  invoice_numbers: string[];
+  invoices: SelectedInvoice[];        // the CHECKED invoices for this customer, each with its own amount
   available_invoices: ActiveInvoice[];
   invoicesLoading: boolean;
 }
 
 const emptyEntry = (): DistributionEntry => ({
-  customer_name: "", amount: "", invoice_numbers: [], available_invoices: [], invoicesLoading: false,
+  customer_name: "", invoices: [], available_invoices: [], invoicesLoading: false,
 });
 
 export default function PaymentDistributionCard({
@@ -62,15 +71,15 @@ export default function PaymentDistributionCard({
         setTotalAmount(ctx.total_amount);
         setCurrency(ctx.currency);
         setAllCustomers(ctx.all_customers || []);
-        // Pre-fill one blank-amount row per registered provider roster
-        // customer (third-party rows only) -- a nice starting point, not
-        // a requirement; card/cheque rows start with zero rows instead.
+        // Pre-fill one blank row per registered provider roster customer
+        // (third-party rows only) -- a nice starting point, not a
+        // requirement; card/cheque rows start with zero rows instead.
         const starter: DistributionEntry[] = (ctx.roster || []).map((name: string) => ({
           ...emptyEntry(), customer_name: name,
         }));
         setEntries(starter);
       })
-      .catch((e) => setError(e?.response?.data?.detail || "Could not load distribution context."))
+      .catch((e) => setError(getErrorMessage(e, "Could not load distribution context.")))
       .finally(() => setLoading(false));
   }, [recordId]);
 
@@ -83,7 +92,7 @@ export default function PaymentDistributionCard({
   // only invoices with real remaining balance are ever offered, so
   // there's nothing to select that would fail validation later anyway.
   const handleCustomerChange = async (idx: number, name: string) => {
-    updateRow(idx, { customer_name: name, invoice_numbers: [], available_invoices: [], invoicesLoading: !!name });
+    updateRow(idx, { customer_name: name, invoices: [], available_invoices: [], invoicesLoading: !!name });
     if (!name) return;
     try {
       const res = await getActiveInvoicesForCustomer(recordId, name);
@@ -93,32 +102,65 @@ export default function PaymentDistributionCard({
     }
   };
 
-  const toggleInvoice = (idx: number, invoiceNumber: string) => {
+  // Checking an invoice adds it (with a blank amount) to that customer's
+  // list; unchecking removes it and its amount entirely.
+  const toggleInvoice = (idx: number, iv: ActiveInvoice) => {
     setEntries((prev) => prev.map((e, i) => {
       if (i !== idx) return e;
-      const already = e.invoice_numbers.includes(invoiceNumber);
-      return { ...e, invoice_numbers: already ? e.invoice_numbers.filter((n) => n !== invoiceNumber) : [...e.invoice_numbers, invoiceNumber] };
+      const already = e.invoices.some((sel) => sel.invoice_number === iv.invoice_number);
+      return {
+        ...e,
+        invoices: already
+          ? e.invoices.filter((sel) => sel.invoice_number !== iv.invoice_number)
+          : [...e.invoices, {
+              invoice_number: iv.invoice_number, amount: "",
+              outstanding_amount: iv.outstanding_amount, currency: iv.currency,
+            }],
+      };
     }));
   };
 
-  const enteredTotal = entries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+  const updateInvoiceAmount = (idx: number, invoiceNumber: string, amount: string) => {
+    setEntries((prev) => prev.map((e, i) => {
+      if (i !== idx) return e;
+      return {
+        ...e,
+        invoices: e.invoices.map((sel) => (sel.invoice_number === invoiceNumber ? { ...sel, amount } : sel)),
+      };
+    }));
+  };
+
+  const allSelectedInvoices = entries.flatMap((e) => e.invoices);
+  const enteredTotal = allSelectedInvoices.reduce((sum, iv) => sum + (parseFloat(iv.amount) || 0), 0);
   const diff = Math.round((totalAmount - enteredTotal) * 100) / 100;
   const addsUp = Math.abs(diff) < 0.01 && entries.length > 0;
-  const everyRowHasInvoice = entries.every((e) => e.invoice_numbers.length > 0);
+  const everyRowHasInvoice = entries.every((e) => e.invoices.length > 0);
+  const everyInvoiceHasAmount = allSelectedInvoices.every((iv) => (parseFloat(iv.amount) || 0) > 0);
+  const canConfirm = addsUp && everyRowHasInvoice && everyInvoiceHasAmount;
+
+  // Cover BOTH reasons Confirm can be blocked, not just the invoice one --
+  // a customer with an invoice checked but no amount typed used to show no
+  // warning at all, just an unexplained disabled button.
+  const blockedReasons: string[] = [];
+  if (!everyRowHasInvoice) blockedReasons.push("every customer needs at least one invoice selected");
+  if (everyRowHasInvoice && !everyInvoiceHasAmount) blockedReasons.push("every selected invoice needs an amount entered against it");
+  if (everyRowHasInvoice && everyInvoiceHasAmount && !addsUp) blockedReasons.push("the amounts entered must add up to the full credited total");
 
   const handleConfirm = async () => {
     setSaving(true); setError(""); setResult(null);
     try {
       const payload = entries.map((e) => ({
         customer_name: e.customer_name,
-        amount: parseFloat(e.amount) || 0,
-        invoice_numbers: e.invoice_numbers,
+        invoices: e.invoices.map((iv) => ({
+          invoice_number: iv.invoice_number,
+          amount: parseFloat(iv.amount) || 0,
+        })),
       }));
       const res = await confirmDistribution(recordId, payload);
       setResult(res.data);
       onDistributed();
     } catch (e: any) {
-      setError(e?.response?.data?.detail || "Could not confirm this distribution.");
+      setError(getErrorMessage(e, "Could not confirm this distribution."));
     }
     setSaving(false);
   };
@@ -143,6 +185,7 @@ export default function PaymentDistributionCard({
           {result.children?.map((c: any) => (
             <div key={c.id} className="flex items-center justify-between text-xs bg-gray-50 border border-gray-100 rounded-sm px-3 py-2">
               <span className="font-semibold text-primary">{c.customer_name}</span>
+              <span className="font-mono text-gray-500">{c.invoice_number}</span>
               <span className="font-mono">{c.amount.toLocaleString()}</span>
               <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">{c.reason_code}</span>
               <span className={c.receipt_created ? "text-emerald-600" : "text-red-500"}>
@@ -179,13 +222,6 @@ export default function PaymentDistributionCard({
                   emptyMessage="No customer matches your search."
                 />
               </div>
-              <input
-                type="number" step="0.01"
-                value={entry.amount}
-                onChange={(e) => updateRow(idx, { amount: e.target.value })}
-                placeholder="Amount"
-                className="w-32 text-xs font-mono px-2 py-1.5 border border-gray-200 rounded-sm"
-              />
               <button onClick={() => removeRow(idx)} className="text-gray-400 hover:text-red-500 cursor-pointer">
                 <Trash2 size={14} />
               </button>
@@ -194,7 +230,7 @@ export default function PaymentDistributionCard({
             {entry.customer_name && (
               <div className="pl-1">
                 <div className="text-[10px] font-black uppercase tracking-wider text-gray-400 mb-1">
-                  Active invoices for {entry.customer_name}
+                  Active invoices for {entry.customer_name} — check one, then enter the amount against it
                 </div>
                 {entry.invoicesLoading ? (
                   <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
@@ -205,21 +241,33 @@ export default function PaymentDistributionCard({
                 ) : (
                   <div className="space-y-1">
                     {entry.available_invoices.map((iv) => {
-                      const checked = entry.invoice_numbers.includes(iv.invoice_number);
+                      const selected = entry.invoices.find((sel) => sel.invoice_number === iv.invoice_number);
+                      const checked = !!selected;
                       return (
-                        <label key={iv.invoice_number}
-                          className={`flex items-center justify-between gap-2 text-[11px] px-2 py-1.5 rounded-sm border cursor-pointer ${
+                        <div key={iv.invoice_number}
+                          className={`flex items-center justify-between gap-2 text-[11px] px-2 py-1.5 rounded-sm border ${
                             checked ? "bg-indigo-50 border-indigo-300" : "bg-white border-gray-100 hover:border-gray-200"
                           }`}>
-                          <span className="flex items-center gap-2">
-                            <span className={`w-4 h-4 rounded-sm border flex items-center justify-center ${checked ? "bg-indigo-600 border-indigo-600" : "border-gray-300"}`}>
+                          <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                            <span className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${checked ? "bg-indigo-600 border-indigo-600" : "border-gray-300"}`}>
                               {checked && <Check size={11} className="text-white" />}
                             </span>
-                            <input type="checkbox" className="hidden" checked={checked} onChange={() => toggleInvoice(idx, iv.invoice_number)} />
-                            <span className="font-mono font-semibold text-primary">{iv.invoice_number}</span>
-                          </span>
-                          <span className="font-mono text-gray-500">{iv.outstanding_amount.toLocaleString()} {iv.currency}</span>
-                        </label>
+                            <input type="checkbox" className="hidden" checked={checked} onChange={() => toggleInvoice(idx, iv)} />
+                            <span className="font-mono font-semibold text-primary truncate">{iv.invoice_number}</span>
+                            <span className="font-mono text-gray-400 shrink-0">
+                              (outstanding: {iv.outstanding_amount.toLocaleString()} {iv.currency})
+                            </span>
+                          </label>
+                          {checked && (
+                            <input
+                              type="number" step="0.01"
+                              value={selected!.amount}
+                              onChange={(e) => updateInvoiceAmount(idx, iv.invoice_number, e.target.value)}
+                              placeholder="Amount"
+                              className="w-28 shrink-0 text-xs font-mono px-2 py-1 border border-indigo-200 rounded-sm bg-white"
+                            />
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -240,8 +288,10 @@ export default function PaymentDistributionCard({
           <span>{addsUp ? "Adds up ✓" : `Remaining: ${diff.toLocaleString()} ${currency}`}</span>
         </div>
 
-        {!everyRowHasInvoice && entries.length > 0 && (
-          <p className="text-[11px] text-amber-700 font-medium">Every customer needs at least one invoice selected before this can be confirmed.</p>
+        {blockedReasons.length > 0 && (
+          <ul className="text-[11px] text-amber-700 font-medium list-disc pl-4 space-y-0.5">
+            {blockedReasons.map((reason) => <li key={reason}>{reason.charAt(0).toUpperCase() + reason.slice(1)}.</li>)}
+          </ul>
         )}
 
         {error && (
@@ -253,11 +303,11 @@ export default function PaymentDistributionCard({
 
         <button
           onClick={handleConfirm}
-          disabled={!addsUp || !everyRowHasInvoice || saving}
+          disabled={!canConfirm || saving}
           className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-sm bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase tracking-wider disabled:opacity-40 cursor-pointer"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Split size={14} />}
-          Confirm Distribution — Creates {entries.length} Receipt{entries.length !== 1 ? "s" : ""}
+          Confirm Distribution — Creates {allSelectedInvoices.length} Receipt{allSelectedInvoices.length !== 1 ? "s" : ""}
         </button>
       </div>
     </div>

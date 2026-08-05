@@ -53,7 +53,7 @@
  */
 import {
   AlertTriangle, ArrowLeft, Briefcase, Calendar, Check,
-  CheckSquare, ChevronDown, Download, Eye, FileText,
+  CheckSquare, CheckCircle2, ChevronDown, Download, Eye, FileText,
   Landmark, Layers, Loader2, RefreshCw, Search,
   ShieldCheck, Sparkles, User, X, HelpCircle, Ban,
   Split, TrendingDown, Trash2,
@@ -125,6 +125,7 @@ interface RunMetrics {
   unidentified:        number;
   needs_remittance:    number;
   needs_distribution:  number;
+  distributed:         number;
   ready_for_oracle:    number;
   short_payment:       number;
   conflict_exception:  number;
@@ -185,6 +186,7 @@ type TabKeyNoAll =
   | "unidentified"
   | "needs_remittance"
   | "needs_distribution"
+  | "distributed"
   | "ready_for_oracle"
   | "short_payment"
   | "conflict_exception"
@@ -518,6 +520,7 @@ function AnalysisHistoryPageInner() {
     { key: "unidentified",        label: "Unidentified",         count: m?.unidentified ?? 0 },
     { key: "needs_remittance",    label: "Needs Remittance",     count: m?.needs_remittance ?? 0 },
     { key: "needs_distribution",  label: "Needs Distribution",   count: m?.needs_distribution ?? 0 },
+    { key: "distributed",         label: "Distributed",          count: m?.distributed ?? 0 },
     { key: "ready_for_oracle",    label: "Ready for Oracle",     count: m?.ready_for_oracle ?? 0 },
     { key: "short_payment",       label: "Short Payment",        count: m?.short_payment ?? 0 },
     { key: "conflict_exception",  label: "Conflict / Exception", count: m?.conflict_exception ?? 0 },
@@ -740,6 +743,7 @@ function AnalysisHistoryPageInner() {
                 { label:"Unidentified",        value:m?.unidentified       ??0, sub:"No customer or invoice signal",               icon:<HelpCircle size={12}/>,                          color:"text-red-500"     },
                 { label:"Needs Remittance",    value:m?.needs_remittance   ??0, sub:"Customer found, awaiting remittance/invoice", icon:<Calendar size={12}/>,                            color:"text-amber-500"   },
                 { label:"Needs Distribution",  value:m?.needs_distribution ??0, sub:"Credit card / cheque / third-party — awaiting Split & Map", icon:<Split size={12}/>,             color:"text-indigo-500"  },
+                { label:"Distributed",         value:m?.distributed        ??0, sub:"Split & Map confirmed — see child receipts",  icon:<CheckCircle2 size={12}/>,                        color:"text-indigo-600"  },
                 { label:"Ready for Oracle",    value:m?.ready_for_oracle   ??0, sub:"Exact match — one click to post",             icon:<Sparkles size={12}/>,                            color:"text-emerald-600" },
                 { label:"Short Payment",       value:m?.short_payment      ??0, sub:"Within tolerance, or manually recorded — one click to post", icon:<TrendingDown size={12}/>,     color:"text-orange-500"  },
                 { label:"Conflict / Exception",value:m?.conflict_exception ??0, sub:"Needs SPOC judgment, not just a click",       icon:<AlertTriangle size={12}/>,                       color:"text-red-600"     },
