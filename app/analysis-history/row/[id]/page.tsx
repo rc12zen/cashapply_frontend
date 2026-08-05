@@ -74,6 +74,7 @@ import { SpecialFlagsBanner, deriveSpecialFlags, deriveCrossFlags } from "@/comp
 import PaymentReceivedCard from "@/components/row-detail/PaymentReceivedCard";
 import IdentifiedCard from "@/components/row-detail/IdentifiedCard";
 import ManualInvoiceMappingCard from "@/components/row-detail/ManualInvoiceMappingCard";
+import PaymentDistributionCard from "@/components/row-detail/PaymentDistributionCard";
 import AgingSnapshotCard from "@/components/row-detail/AgingSnapshotCard";
 import WhyStatusCard from "@/components/row-detail/WhyStatusCard";
 import OracleFusionCard from "@/components/row-detail/OracleFusionCard";
@@ -319,7 +320,11 @@ export default function RowDetailPage() {
 
             <IdentifiedCard recordId={recordId} detail={detail} onCorrected={fetchDetail} />
 
-            <ManualInvoiceMappingCard recordId={recordId} detail={detail} onMapped={fetchDetail} />
+            {detail.category === "needs_distribution" ? (
+              <PaymentDistributionCard recordId={recordId} onDistributed={fetchDetail} />
+            ) : (
+              <ManualInvoiceMappingCard recordId={recordId} detail={detail} onMapped={fetchDetail} />
+            )}
 
             {confirmed_invoices.length > 0 && (
               <AgingSnapshotCard

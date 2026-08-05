@@ -392,6 +392,12 @@ export const discardEntry        = (id: number, comment?: string) => API.post(`/
 // override_settlement_as_customer_payment(). Moves the row out of the
 // broker/card/cheque bucket into the standard Manual Invoice Mapping flow.
 export const settlementOverride  = (id: number)                   => API.post(`/api/hitl/settlement-override/${id}`, {});
+// Payment Distribution (Split & Map) -- see hitl/split_and_map.py.
+export const getDistributionContext = (id: number) => API.get(`/api/hitl/distribution-context/${id}`);
+export const previewDistribution    = (id: number, entries: any[]) => API.post(`/api/hitl/distribution-preview/${id}`, { entries });
+export const confirmDistribution    = (id: number, entries: any[]) => API.post(`/api/hitl/distribution-confirm/${id}`, { entries });
+export const getActiveInvoicesForCustomer = (id: number, customerName: string) =>
+  API.get(`/api/hitl/distribution-customer-invoices/${id}`, { params: { customer_name: customerName } });
 // Cross-ledger-currency rows only, before invoice mapping — see
 // hitl/service.py's edit_gl_rate() for the guard.
 export const editGlRate          = (id: number, newRate: number, reason?: string) =>
