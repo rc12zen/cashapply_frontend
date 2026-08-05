@@ -16,7 +16,7 @@
 import { useState } from "react";
 import {
   CheckCircle2, ChevronDown, ChevronUp, Loader2, AlertTriangle,
-  X, Split, Settings2,
+  X, Split, Settings2, RefreshCw, Code2,
 } from "lucide-react";
 import type { RowDetail } from "@/components/row-detail/types";
 import {
@@ -54,6 +54,7 @@ function EntryRow({
   onChanged: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showPayload, setShowPayload] = useState(false);
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [error, setError] = useState("");
   const [showGlRateModal, setShowGlRateModal] = useState(false);
@@ -64,6 +65,7 @@ function EntryRow({
   const canApprove = entry.hitl_status === "pending" && entry.passed_validation;
   const canReject = entry.hitl_status === "pending";
   const canEditGlRate = entry.is_cross_ledger && entry.reference_status !== "success";
+  const hadFailedAttempt = entry.oracle_post_status === "failed" || entry.reference_status === "failed";
 
   const handleApprove = async () => {
     setBusy("approve"); setError("");
@@ -169,6 +171,24 @@ function EntryRow({
             </div>
           )}
 
+          {entry.oracle_payload && (
+            <div>
+              <button
+                onClick={() => setShowPayload((v) => !v)}
+                className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-500 hover:text-indigo-600 cursor-pointer"
+              >
+                <Code2 size={11} />
+                {showPayload ? "Hide" : "Show"} Oracle Payload
+                {entry.oracle_status_code ? ` (status ${entry.oracle_status_code})` : ""}
+              </button>
+              {showPayload && (
+                <pre className="mt-1.5 text-[10px] font-mono bg-gray-900 text-gray-100 rounded-sm p-2.5 overflow-x-auto max-h-64 overflow-y-auto">
+                  {JSON.stringify(entry.oracle_payload, null, 2)}
+                </pre>
+              )}
+            </div>
+          )}
+
           {!entry.passed_validation && entry.hitl_status === "pending" && (
             <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-sm px-3 py-2">
               <AlertTriangle size={12} className="text-red-500 shrink-0 mt-0.5" />
@@ -191,8 +211,14 @@ function EntryRow({
                 disabled={!canApprove || busy !== null}
                 className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider px-3 py-1.5 rounded-sm bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-40 cursor-pointer"
               >
-                {busy === "approve" ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                Approve &amp; Post
+                {busy === "approve" ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : hadFailedAttempt ? (
+                  <RefreshCw size={12} />
+                ) : (
+                  <CheckCircle2 size={12} />
+                )}
+                {hadFailedAttempt ? "Retry Approve & Post" : "Approve & Post"}
               </button>
               <button
                 onClick={handleReject}
