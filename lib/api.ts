@@ -107,6 +107,9 @@ export const updateOrganizationUnit = (
 // Row identity for the three consolidated-settlement types -- see
 // bff/settlement_identifier_routes.py and bank_statement/settlement_identifier.py.
 export const getSettlementIdentifiers = () => API.get("/api/bank-accounts/settlement-identifiers");
+// Sourced from the SAME loaded aging report every other customer picker in
+// this app uses — not hand-typed. See bff/settlement_identifier_routes.py.
+export const getAgingCustomersForProviders = () => API.get("/api/bank-accounts/settlement-identifiers/aging-customers");
 export const createNarrativeIdentifier = (
 	payload: { identifier_type: "card_narrative" | "cheque_narrative"; pattern: string },
 ) => API.post("/api/bank-accounts/settlement-identifiers/narrative", payload);
@@ -379,6 +382,34 @@ export const purgeSystemLogs  = () => API.delete("/api/activity-log/purge-system
 export const getPendingHitl     = ()                             => API.get("/api/hitl/pending");
 export const getApprovalPreview = (id: number)                   => API.get(`/api/hitl/preview/${id}`);
 export const rejectEntry        = (id: number, comment?: string) => API.post(`/api/hitl/reject/${id}`, { comment });
+// Unidentified rows only — see hitl/service.py's mark_eligible_for_receipt()
+// / discard_row(). markEligible creates the bare Oracle receipt now (held
+// back automatically by Step 4.5 for unidentified rows); discardEntry moves
+// the row to its own "Discarded" state without ever creating one.
+export const markEligible        = (id: number)                   => API.post(`/api/hitl/mark-eligible/${id}`, {});
+export const discardEntry        = (id: number, comment?: string) => API.post(`/api/hitl/discard/${id}`, { comment });
+// Needs Distribution rows only — see hitl/service.py's
+// override_settlement_as_customer_payment(). Moves the row out of the
+// broker/card/cheque bucket into the standard Manual Invoice Mapping flow.
+export const settlementOverride  = (id: number)                   => API.post(`/api/hitl/settlement-override/${id}`, {});
+// Payment Distribution (Split & Map) -- see hitl/split_and_map.py.
+export const getDistributionContext = (id: number) => API.get(`/api/hitl/distribution-context/${id}`);
+export const previewDistribution    = (id: number, entries: any[]) => API.post(`/api/hitl/distribution-preview/${id}`, { entries });
+export const confirmDistribution    = (id: number, entries: any[]) => API.post(`/api/hitl/distribution-confirm/${id}`, { entries });
+export const getActiveInvoicesForCustomer = (id: number, customerName: string) =>
+  API.get(`/api/hitl/distribution-customer-invoices/${id}`, { params: { customer_name: customerName } });
+// Per-entry actions on a distributed parent's distribution_breakdown --
+// no child rows, see hitl/distribution_actions.py.
+export const approveDistributionEntry = (id: number, entryId: string, comment?: string) =>
+  API.post(`/api/hitl/distribution-entry-approve/${id}/${entryId}`, { comment });
+export const rejectDistributionEntry  = (id: number, entryId: string, comment?: string) =>
+  API.post(`/api/hitl/distribution-entry-reject/${id}/${entryId}`, { comment });
+export const editDistributionEntryGlRate = (id: number, entryId: string, newRate: number, reason?: string) =>
+  API.put(`/api/hitl/distribution-entry-gl-rate/${id}/${entryId}`, { new_rate: newRate, reason });
+// Cross-ledger-currency rows only, before invoice mapping — see
+// hitl/service.py's edit_gl_rate() for the guard.
+export const editGlRate          = (id: number, newRate: number, reason?: string) =>
+  API.put(`/api/hitl/gl-rate/${id}`, { new_rate: newRate, reason });
 export const approveBulk        = (ids: number[])                => API.post("/api/hitl/approve-bulk", { ids });
 export const getHitlHistory     = ()                             => API.get("/api/hitl/history");
 export const retryOracle        = (id: number)                   => API.post(`/api/hitl/retry-oracle/${id}`, {});

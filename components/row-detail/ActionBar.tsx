@@ -27,6 +27,9 @@ import {
   Circle,
   Loader2,
   AlertTriangle,
+  Trash2,
+  Edit3,
+  ArrowRightLeft,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -44,6 +47,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   "link": Link2,
   "refresh-cw": RefreshCw,
   "rotate-cw": RotateCw,
+  "trash-2": Trash2,
+  "edit-3": Edit3,
+  "arrow-right-left": ArrowRightLeft,
 };
 
 export default function ActionBar({

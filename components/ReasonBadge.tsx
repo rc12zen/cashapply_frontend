@@ -22,6 +22,13 @@ const STATE_STYLES: Record<string, string> = {
   processed:                "bg-emerald-100 text-emerald-800",
   rejected:                 "bg-red-100 text-red-800",
   post_failed:              "bg-red-100 text-red-800",
+  // NEW — see hitl/service.py's discard_row(). Neutral gray, not red like
+  // rejected: nothing went wrong, a SPOC just judged this row was never a
+  // real receivable transaction.
+  discarded:                "bg-gray-100 text-gray-600",
+  // NEW — see hitl/split_and_map.py. Terminal, like discarded, but its
+  // own color since nothing went wrong — the row was resolved into child receipts.
+  distributed:              "bg-indigo-100 text-indigo-800",
 }
 
 const REASON_LABELS: Record<string, string> = {
@@ -55,6 +62,8 @@ const REASON_LABELS: Record<string, string> = {
   // NEW — see hitl/manual_mapping.py's R9d and rule_engine/state_machine.py's R19.
   SHORT_PAYMENT_RECORDED:            "Short Payment — Recorded",
   INVOICE_ALREADY_APPLIED:           "Invoice Already Applied (Duplicate)",
+  // NEW — see hitl/split_and_map.py's confirm_distribution().
+  DISTRIBUTION_CHILD:                "Split & Map — Customer Share",
 }
 
 export default function ReasonBadge({

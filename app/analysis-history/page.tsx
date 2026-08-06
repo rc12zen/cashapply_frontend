@@ -53,10 +53,10 @@
  */
 import {
   AlertTriangle, ArrowLeft, Briefcase, Calendar, Check,
-  CheckSquare, ChevronDown, Download, Eye, FileText,
+  CheckSquare, CheckCircle2, ChevronDown, Download, Eye, FileText,
   Landmark, Layers, Loader2, RefreshCw, Search,
   ShieldCheck, Sparkles, User, X, HelpCircle, Ban,
-  Split, TrendingDown,
+  Split, TrendingDown, Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Suspense } from "react";
@@ -100,6 +100,7 @@ interface AnalysisRun {
   total_ready_for_oracle: number;  // R9a only, as of the short-payment split — see RunMetrics below
   total_short_payment:   number;   // R9b + R9d — one-click-approve eligible, own bucket now
   total_needs_distribution: number; // R16/R17/R18 — card/cheque/third-party, awaiting Split & Map
+  total_discarded:      number;    // unidentified rows a SPOC judged not a real receivable
   // Legacy fields — kept for CSV export / backward compatibility, no longer
   // displayed in the run-list table itself.
   total_matched:       number;
@@ -124,12 +125,14 @@ interface RunMetrics {
   unidentified:        number;
   needs_remittance:    number;
   needs_distribution:  number;
+  distributed:         number;
   ready_for_oracle:    number;
   short_payment:       number;
   conflict_exception:  number;
   processed:           number;
   rejected:            number;
   post_failed:         number;
+  discarded:           number;
 }
 
 interface LineItem {
@@ -183,12 +186,14 @@ type TabKeyNoAll =
   | "unidentified"
   | "needs_remittance"
   | "needs_distribution"
+  | "distributed"
   | "ready_for_oracle"
   | "short_payment"
   | "conflict_exception"
   | "processed"
   | "rejected"
-  | "post_failed";
+  | "post_failed"
+  | "discarded";
 
 type TabKey = "all" | TabKeyNoAll;
 
@@ -472,7 +477,7 @@ function AnalysisHistoryPageInner() {
   const exportHistoryPdf = async () => {
     if (!filteredRuns.length) return;
     const { downloadTablePdf } = await import("@/lib/pdf");
-    const headers = ["Time", "Account Statement(s)", "Bank(s)", "BU(s)", "Run By", "Total Rows", "Identified", "Unidentified", "Needs Distribution", "Ready for Oracle", "Short Payment", "Status"];
+    const headers = ["Time", "Account Statement(s)", "Bank(s)", "BU(s)", "Run By", "Total Rows", "Identified", "Unidentified", "Needs Distribution", "Ready for Oracle", "Short Payment", "Discarded", "Status"];
     const rows = filteredRuns.map((r) => [
       formatDate(r.started_at),
       (r.selected_files || []).join(", "),
@@ -485,6 +490,7 @@ function AnalysisHistoryPageInner() {
       (r.total_needs_distribution || 0).toLocaleString(),
       (r.total_ready_for_oracle || 0).toLocaleString(),
       (r.total_short_payment || 0).toLocaleString(),
+      (r.total_discarded || 0).toLocaleString(),
       r.status,
     ]);
     downloadTablePdf("Analysis_History", headers, rows, {
@@ -514,12 +520,14 @@ function AnalysisHistoryPageInner() {
     { key: "unidentified",        label: "Unidentified",         count: m?.unidentified ?? 0 },
     { key: "needs_remittance",    label: "Needs Remittance",     count: m?.needs_remittance ?? 0 },
     { key: "needs_distribution",  label: "Needs Distribution",   count: m?.needs_distribution ?? 0 },
+    { key: "distributed",         label: "Distributed",          count: m?.distributed ?? 0 },
     { key: "ready_for_oracle",    label: "Ready for Oracle",     count: m?.ready_for_oracle ?? 0 },
     { key: "short_payment",       label: "Short Payment",        count: m?.short_payment ?? 0 },
     { key: "conflict_exception",  label: "Conflict / Exception", count: m?.conflict_exception ?? 0 },
     { key: "processed",           label: "Processed",             count: m?.processed ?? 0 },
     { key: "rejected",            label: "Rejected",               count: m?.rejected ?? 0 },
     { key: "post_failed",         label: "Post Failed",            count: m?.post_failed ?? 0 },
+    { key: "discarded",           label: "Discarded",              count: m?.discarded ?? 0 },
   ];
 
   // ── History List ──────────────────────────────────────────────────────────
@@ -602,7 +610,7 @@ function AnalysisHistoryPageInner() {
             <table className="w-full text-left border-collapse min-w-[1100px]">
               <thead className="sticky top-0 z-20 shadow-[0_1px_0_0_rgba(23,46,76,1)]">
                 <tr className="bg-[#222222] text-white">
-                  {["Time","Account Statement(s)","Bank(s)","BU(s)","Run By","Total Rows","Identified","Unidentified","Needs Distribution","Ready for Oracle","Short Payment","Status"].map((h) => (
+                  {["Time","Account Statement(s)","Bank(s)","BU(s)","Run By","Total Rows","Identified","Unidentified","Needs Distribution","Ready for Oracle","Short Payment","Discarded","Status"].map((h) => (
                     <th key={h} className="px-3 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#222222]">{h}</th>
                   ))}
                   <th className="sticky right-0 z-30 px-4 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#222222] border-l border-[#000000] text-center w-24 shadow-[-2px_0_4px_rgba(0,0,0,0.1)]">View</th>
@@ -626,6 +634,7 @@ function AnalysisHistoryPageInner() {
                     <td className="px-3 py-3 text-right font-bold font-mono text-indigo-500">{(r.total_needs_distribution||0).toLocaleString()}</td>
                     <td className="px-3 py-3 text-right font-bold font-mono text-blue-600">{(r.total_ready_for_oracle||0).toLocaleString()}</td>
                     <td className="px-3 py-3 text-right font-bold font-mono text-orange-500">{(r.total_short_payment||0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right font-bold font-mono text-gray-500">{(r.total_discarded||0).toLocaleString()}</td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-xs px-2 py-0.5 border ${r.status==="completed"?"bg-emerald-50 text-emerald-700 border-emerald-200":r.status==="running"?"bg-blue-50 text-blue-700 border-blue-200":"bg-red-50 text-red-700 border-red-200"}`}>
                         {r.status}
@@ -734,12 +743,14 @@ function AnalysisHistoryPageInner() {
                 { label:"Unidentified",        value:m?.unidentified       ??0, sub:"No customer or invoice signal",               icon:<HelpCircle size={12}/>,                          color:"text-red-500"     },
                 { label:"Needs Remittance",    value:m?.needs_remittance   ??0, sub:"Customer found, awaiting remittance/invoice", icon:<Calendar size={12}/>,                            color:"text-amber-500"   },
                 { label:"Needs Distribution",  value:m?.needs_distribution ??0, sub:"Credit card / cheque / third-party — awaiting Split & Map", icon:<Split size={12}/>,             color:"text-indigo-500"  },
+                { label:"Distributed",         value:m?.distributed        ??0, sub:"Split & Map confirmed — see child receipts",  icon:<CheckCircle2 size={12}/>,                        color:"text-indigo-600"  },
                 { label:"Ready for Oracle",    value:m?.ready_for_oracle   ??0, sub:"Exact match — one click to post",             icon:<Sparkles size={12}/>,                            color:"text-emerald-600" },
                 { label:"Short Payment",       value:m?.short_payment      ??0, sub:"Within tolerance, or manually recorded — one click to post", icon:<TrendingDown size={12}/>,     color:"text-orange-500"  },
                 { label:"Conflict / Exception",value:m?.conflict_exception ??0, sub:"Needs SPOC judgment, not just a click",       icon:<AlertTriangle size={12}/>,                       color:"text-red-600"     },
                 { label:"Processed",           value:m?.processed          ??0, sub:"Posted to Oracle Fusion",                      icon:<CheckSquare size={12}/>,                         color:"text-emerald-600" },
                 { label:"Rejected",            value:m?.rejected            ??0, sub:"Rejected by SPOC",                            icon:<X size={12} className="stroke-[2.5]"/>,           color:"text-red-500"     },
                 { label:"Post Failed",         value:m?.post_failed         ??0, sub:"Approved but Oracle POST failed",            icon:<Ban size={12}/>,                                  color:"text-amber-600"   },
+                { label:"Discarded",           value:m?.discarded           ??0, sub:"Unidentified — judged not a real receipt",   icon:<Trash2 size={12}/>,                               color:"text-gray-500"    },
               ].map(({ label, value, sub, icon, color }) => (
                 <div key={label} className="border border-gray-200 p-3 rounded-sm bg-gray-50/30 flex flex-col justify-between">
                   <div>
