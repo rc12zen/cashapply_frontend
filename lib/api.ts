@@ -304,8 +304,14 @@ export const getRunSummary = (runId: number) =>
  *                        (invoice_number, customer_name, outstanding_amount,
  *                         currency, ou_number, invoice_date,
  *                         remittance_amount, computed_amount)
- *   sum_outstanding — Sum of outstanding across all confirmed invoices
- *   credit_amount   — Bank credited amount
+ *   sum_outstanding — Sum of outstanding across all confirmed invoices (invoice ccy)
+ *   credit_amount   — Bank credited amount (credited ccy — raw, not converted)
+ *   fx              — Currency-aware view of the credited amount. Use
+ *                     fx.credit_amount_invoice_ccy (credited amount converted to
+ *                     invoice currency) for any comparison against sum_outstanding.
+ *                     {is_cross_currency, credited_currency, invoice_currency,
+ *                      credit_amount_credited_ccy, credit_amount_invoice_ccy,
+ *                      fx_credit_to_invoice, fx_credit_to_invoice_source}
  *   pipeline        — Ordered nodes for visual flowchart
  *                     [{key, label, status: passed|failed|skipped|pending, detail}]
  *   oracle          — Payload + Oracle response fields after Processed:

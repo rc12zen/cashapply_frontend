@@ -12,17 +12,25 @@
  */
 import { CheckCircle2, FileText } from "lucide-react";
 import { CardShell, CardHead } from "@/components/row-detail/SharedCardPieces";
-import { ConfirmedInvoice, fmt, fmtDate } from "@/components/row-detail/types";
+import { ConfirmedInvoice, FxView, fmt, fmtDate } from "@/components/row-detail/types";
 
 export default function AgingSnapshotCard({
-  confirmedInvoices, sumOutstanding, creditAmount, bankCurrency, sumRefs,
+  confirmedInvoices, sumOutstanding, creditAmount, bankCurrency, sumRefs, fx,
 }: {
   confirmedInvoices: ConfirmedInvoice[];
   sumOutstanding: number;
   creditAmount: number;
   bankCurrency: string;
   sumRefs: number;
+  fx?: FxView;
 }) {
+  // sumRefs (allocated) and sumOutstanding are in invoice currency, so the
+  // "balanced?" check must compare against the credited amount CONVERTED to
+  // invoice currency — not the raw creditAmount, which is in credited
+  // currency and would flag a false mismatch on any cross-currency row.
+  const creditInInvoiceCcy = fx ? fx.credit_amount_invoice_ccy : creditAmount;
+  const showConversion = !!(fx && fx.is_cross_currency && fx.fx_credit_to_invoice);
+  const invoiceCcy = fx?.invoice_currency || confirmedInvoices[0]?.currency || bankCurrency;
   return (
     <CardShell>
       <CardHead
@@ -70,14 +78,24 @@ export default function AgingSnapshotCard({
                 <td colSpan={3} className="px-4 py-2.5 text-[9px] font-black text-gray-400 uppercase tracking-wider">Total</td>
                 <td className="px-4 py-2.5 font-mono font-black text-right text-[#222222]">{fmt(sumOutstanding)}</td>
                 <td colSpan={2} />
-                <td className={`px-4 py-2.5 font-mono font-black text-right ${Math.abs(sumRefs - creditAmount) < 0.02 ? "text-emerald-700" : "text-red-600"}`}>
+                <td className={`px-4 py-2.5 font-mono font-black text-right ${Math.abs(sumRefs - creditInInvoiceCcy) < 0.02 ? "text-emerald-700" : "text-red-600"}`}>
                   {fmt(sumRefs)}
-                  {Math.abs(sumRefs - creditAmount) >= 0.02 && <span className="ml-1.5 text-[9px]">⚠ mismatch</span>}
+                  {Math.abs(sumRefs - creditInInvoiceCcy) >= 0.02 && <span className="ml-1.5 text-[9px]">⚠ mismatch</span>}
                 </td>
               </tr>
               <tr className="bg-blue-50/50">
                 <td colSpan={3} className="px-4 py-2 text-[9px] font-black text-[#222222] uppercase tracking-wider">Bank credit amount</td>
-                <td colSpan={4} className="px-4 py-2 font-mono font-black text-right text-[#222222]">{fmt(creditAmount)} {bankCurrency}</td>
+                <td colSpan={4} className="px-4 py-2 font-mono font-black text-right text-[#222222]">
+                  {fmt(creditAmount)} {bankCurrency}
+                  {/* Cross-currency: the allocated total above is in invoice
+                      currency, so show the credited amount's invoice-currency
+                      equivalent to make the comparison legible. */}
+                  {showConversion && (
+                    <span className="ml-1.5 text-[10px] font-bold text-gray-500">
+                      (= {fmt(creditInInvoiceCcy)} {invoiceCcy} @ {fmt(fx!.fx_credit_to_invoice, 4)})
+                    </span>
+                  )}
+                </td>
               </tr>
             </tfoot>
           )}

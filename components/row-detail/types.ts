@@ -39,6 +39,21 @@ export function formatApiError(e: any, fallback = "Action failed."): string {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+// Currency-aware view of the credited amount (backend build_row_detail's
+// "fx" block). sum_outstanding is in invoice currency; credit_amount is in
+// credited currency — comparing them directly is only valid same-currency.
+// For any amount comparison, use credit_amount_invoice_ccy so both sides are
+// in invoice currency.
+export interface FxView {
+  is_cross_currency:           boolean;
+  credited_currency:           string | null;   // e.g. "ZAR"
+  invoice_currency:            string | null;    // e.g. "EUR"
+  credit_amount_credited_ccy:  number;           // raw credited amount, e.g. 348777.50 ZAR
+  credit_amount_invoice_ccy:   number;           // converted, e.g. 17181.13 EUR
+  fx_credit_to_invoice:        number | null;    // Leg 1 rate; null if unresolved (R13)
+  fx_credit_to_invoice_source: string | null;    // "gl_rates_table" | "static_map" | "spoc_manual"
+}
+
 export interface ConfirmedInvoice {
   invoice_number:     string;
   customer_name:      string | null;
@@ -161,6 +176,9 @@ export interface RowDetail {
   confirmed_invoices: ConfirmedInvoice[];
   sum_outstanding:    number;
   credit_amount:      number;
+  // Currency-aware view of the credited amount — see FxView. Optional so
+  // older backend builds (before the "fx" block) still typecheck.
+  fx?: FxView;
   pipeline:           any[];
   oracle: {
     payload:             Record<string, any>;

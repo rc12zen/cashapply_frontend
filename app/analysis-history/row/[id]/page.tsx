@@ -336,6 +336,7 @@ export default function RowDetailPage() {
                 creditAmount={credit_amount}
                 bankCurrency={bs.currency}
                 sumRefs={sumRefs}
+                fx={detail.fx}
               />
             )}
 
@@ -351,10 +352,11 @@ export default function RowDetailPage() {
               sumOutstanding={sum_outstanding}
               creditAmount={credit_amount}
               bankCurrency={bs.currency}
+              fx={detail.fx}
             />
 
             {showOracleCard && (
-              <OracleFusionCard oracle={oracle} creditAmount={credit_amount} hasOraclePayload={hasOraclePayload} />
+              <OracleFusionCard oracle={oracle} creditAmount={credit_amount} hasOraclePayload={hasOraclePayload} fx={detail.fx} />
             )}
 
             <div className="h-6" />
