@@ -61,7 +61,7 @@
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, settlementOverride } from "@/lib/api";
+import { approveEntry, rejectEntry, reopenEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, settlementOverride } from "@/lib/api";
 
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
@@ -128,6 +128,17 @@ export default function RowDetailPage() {
     setActionLoading(true); setActionError("");
     try { await rejectEntry(recordId); await fetchDetail(); }
     catch (e: any) { setActionError(formatApiError(e)); }
+    setActionLoading(false);
+  };
+
+  const handleReopen = async () => {
+    if (!detail) return;
+    setActionLoading(true); setActionError("");
+    // The backend blocks reopen (with a clear reason) if the invoice is gone
+    // from the current aging report or now claimed elsewhere — surface that
+    // message rather than a generic failure.
+    try { await reopenEntry(recordId); await fetchDetail(); }
+    catch (e: any) { setActionError(formatApiError(e, "Could not reopen this row.")); }
     setActionLoading(false);
   };
 
@@ -213,6 +224,7 @@ export default function RowDetailPage() {
     try {
       if (code === "approve") await handleApprove();
       else if (code === "reject") await handleReject();
+      else if (code === "reopen") await handleReopen();
       else if (code === "retry_oracle") await handleRetry();
       else if (code === "recheck_remittance") await handleRecheckRemittance();
       else if (code === "mark_eligible") await handleMarkEligible();
