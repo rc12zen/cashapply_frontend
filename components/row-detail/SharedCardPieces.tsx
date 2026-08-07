@@ -19,7 +19,7 @@ export function DataRow({ label, value, mono = false }: { label: string; value: 
 
 export function CardShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-sm shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
+    <div className="bg-white border border-gray-200 rounded-sm shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
       {children}
     </div>
   );

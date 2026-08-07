@@ -23,18 +23,58 @@
  *     its own Approve & Post afterward, same as any other row.
  */
 import { useEffect, useState } from "react";
-import { Plus, Trash2, Loader2, AlertTriangle, CheckCircle2, Split, Check } from "lucide-react";
+import { Plus, Trash2, Loader2, AlertTriangle, CheckCircle2, Split, Check, Search, X } from "lucide-react";
 import SearchableSelect from "@/components/row-detail/SearchableSelect";
 import { getDistributionContext, confirmDistribution, getActiveInvoicesForCustomer } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
+import { fmt } from "@/components/row-detail/types";
 
-interface ActiveInvoice { invoice_number: string; outstanding_amount: number; currency: string }
+interface ActiveInvoice {
+  invoice_number: string; outstanding_amount: number; currency: string;
+  is_cross_currency: boolean; fx_rate: number | null;
+}
 
 interface SelectedInvoice {
   invoice_number: string;
   amount: string;                     // kept as a string while editing; parsed on submit
   outstanding_amount: number;         // shown as a hint next to the amount box, not auto-filled
   currency: string;
+  is_cross_currency: boolean;
+  fx_rate: number | null;             // credited currency -> this invoice's currency
+}
+
+// Mirrors hitl/manual_mapping.py's _classify() bands exactly (same order,
+// same rounding, same tolerance) so the rule shown here is the rule Confirm
+// will actually get -- see that function if these bands ever move.
+function gradeInvoice(amountStr: string, iv: SelectedInvoice, tolerancePct: number) {
+  const amount = parseFloat(amountStr) || 0;
+  if (amount <= 0) return null;
+
+  if (iv.is_cross_currency && !iv.fx_rate) {
+    return { rule: "R13", reasonCode: "FX_RATE_MISSING", blocking: true, tone: "red" as const,
+      label: `No FX rate available to convert into ${iv.currency}.` };
+  }
+
+  const converted = Math.round(amount * (iv.fx_rate ?? 1) * 100) / 100;
+  const shortfall = Math.round((iv.outstanding_amount - converted) * 100) / 100;
+  const pct = iv.outstanding_amount === 0 ? 0 : Math.round((shortfall / iv.outstanding_amount) * 10000) / 100;
+
+  const base = { converted, shortfall, pct };
+
+  if (pct < 0) {
+    return { ...base, rule: "R11", reasonCode: "OVERPAYMENT_UNEXPLAINED", blocking: true, tone: "red" as const,
+      label: `Over by ${fmt(Math.abs(shortfall))} ${iv.currency}.` };
+  }
+  if (pct === 0) {
+    return { ...base, rule: "R9a", reasonCode: "EXACT_MATCH", blocking: false, tone: "emerald" as const,
+      label: "Covers the invoice exactly." };
+  }
+  if (pct <= tolerancePct) {
+    return { ...base, rule: "R9b", reasonCode: "ACCEPTABLE_SHORT_PAYMENT", blocking: false, tone: "amber" as const,
+      label: `Short by ${fmt(shortfall)} ${iv.currency} (${pct}%) — within tolerance.` };
+  }
+  return { ...base, rule: "R9d", reasonCode: "SHORT_PAYMENT_RECORDED", blocking: false, tone: "amber" as const,
+    label: `Short by ${fmt(shortfall)} ${iv.currency} (${pct}%) — recorded as short payment, balance stays open.` };
 }
 
 interface DistributionEntry {
@@ -42,10 +82,11 @@ interface DistributionEntry {
   invoices: SelectedInvoice[];        // the CHECKED invoices for this customer, each with its own amount
   available_invoices: ActiveInvoice[];
   invoicesLoading: boolean;
+  invoiceQuery: string;               // local search filter over available_invoices -- view-only, never touches selection
 }
 
 const emptyEntry = (): DistributionEntry => ({
-  customer_name: "", invoices: [], available_invoices: [], invoicesLoading: false,
+  customer_name: "", invoices: [], available_invoices: [], invoicesLoading: false, invoiceQuery: "",
 });
 
 export default function PaymentDistributionCard({
@@ -60,6 +101,7 @@ export default function PaymentDistributionCard({
   const [totalAmount, setTotalAmount] = useState(0);
   const [currency, setCurrency] = useState("");
   const [allCustomers, setAllCustomers] = useState<string[]>([]);
+  const [tolerancePct, setTolerancePct] = useState(12);
   const [entries, setEntries] = useState<DistributionEntry[]>([]);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<any>(null);
@@ -71,6 +113,7 @@ export default function PaymentDistributionCard({
         setTotalAmount(ctx.total_amount);
         setCurrency(ctx.currency);
         setAllCustomers(ctx.all_customers || []);
+        setTolerancePct(ctx.short_payment_tolerance_pct ?? 12);
         // Pre-fill one blank row per registered provider roster customer
         // (third-party rows only) -- a nice starting point, not a
         // requirement; card/cheque rows start with zero rows instead.
@@ -92,7 +135,7 @@ export default function PaymentDistributionCard({
   // only invoices with real remaining balance are ever offered, so
   // there's nothing to select that would fail validation later anyway.
   const handleCustomerChange = async (idx: number, name: string) => {
-    updateRow(idx, { customer_name: name, invoices: [], available_invoices: [], invoicesLoading: !!name });
+    updateRow(idx, { customer_name: name, invoices: [], available_invoices: [], invoicesLoading: !!name, invoiceQuery: "" });
     if (!name) return;
     try {
       const res = await getActiveInvoicesForCustomer(recordId, name);
@@ -115,6 +158,7 @@ export default function PaymentDistributionCard({
           : [...e.invoices, {
               invoice_number: iv.invoice_number, amount: "",
               outstanding_amount: iv.outstanding_amount, currency: iv.currency,
+              is_cross_currency: iv.is_cross_currency, fx_rate: iv.fx_rate,
             }],
       };
     }));
@@ -136,20 +180,58 @@ export default function PaymentDistributionCard({
   const addsUp = Math.abs(diff) < 0.01 && entries.length > 0;
   const everyRowHasInvoice = entries.every((e) => e.invoices.length > 0);
   const everyInvoiceHasAmount = allSelectedInvoices.every((iv) => (parseFloat(iv.amount) || 0) > 0);
-  const canConfirm = addsUp && everyRowHasInvoice && everyInvoiceHasAmount;
+  const grades = allSelectedInvoices.map((iv) => gradeInvoice(iv.amount, iv, tolerancePct));
+  const noBlockingRules = grades.every((g) => !g?.blocking);
+  const canConfirm = addsUp && everyRowHasInvoice && everyInvoiceHasAmount && noBlockingRules;
 
-  // Cover BOTH reasons Confirm can be blocked, not just the invoice one --
+  // Cover every reason Confirm can be blocked, not just the invoice one --
   // a customer with an invoice checked but no amount typed used to show no
   // warning at all, just an unexplained disabled button.
   const blockedReasons: string[] = [];
   if (!everyRowHasInvoice) blockedReasons.push("every customer needs at least one invoice selected");
   if (everyRowHasInvoice && !everyInvoiceHasAmount) blockedReasons.push("every selected invoice needs an amount entered against it");
   if (everyRowHasInvoice && everyInvoiceHasAmount && !addsUp) blockedReasons.push("the amounts entered must add up to the full credited total");
+  if (!noBlockingRules) blockedReasons.push("one or more invoices are overpaid or have no FX rate available — fix those amounts first");
 
   const handleConfirm = async () => {
     setSaving(true); setError(""); setResult(null);
     try {
-      const payload = entries.map((e) => ({
+      // Re-fetch every entry's active invoice list right before submitting --
+      // another row can claim part of the same invoice while this screen sits
+      // open (see invoice_ledger.py), and the backend re-validates against the
+      // LIVE remaining balance at confirm time regardless of what this screen
+      // showed earlier. Without this, a stale "short payment" grade here can
+      // still get rejected server-side as an overpayment.
+      const refreshed = await Promise.all(entries.map(async (e) => {
+        if (!e.customer_name) return e;
+        try {
+          const res = await getActiveInvoicesForCustomer(recordId, e.customer_name);
+          const fresh: ActiveInvoice[] = res.data.invoices || [];
+          const freshByNumber = new Map(fresh.map((iv) => [iv.invoice_number, iv]));
+          return {
+            ...e,
+            available_invoices: fresh,
+            invoices: e.invoices.map((sel) => {
+              const f = freshByNumber.get(sel.invoice_number);
+              return f
+                ? { ...sel, outstanding_amount: f.outstanding_amount, is_cross_currency: f.is_cross_currency, fx_rate: f.fx_rate }
+                : sel;
+            }),
+          };
+        } catch {
+          return e;
+        }
+      }));
+      setEntries(refreshed);
+
+      const freshGrades = refreshed.flatMap((e) => e.invoices).map((iv) => gradeInvoice(iv.amount, iv, tolerancePct));
+      if (freshGrades.some((g) => g?.blocking)) {
+        setError("Invoice balances changed since this screen loaded — check the highlighted row(s) above and adjust the amount before confirming again.");
+        setSaving(false);
+        return;
+      }
+
+      const payload = refreshed.map((e) => ({
         customer_name: e.customer_name,
         invoices: e.invoices.map((iv) => ({
           invoice_number: iv.invoice_number,
@@ -209,7 +291,11 @@ export default function PaymentDistributionCard({
       </div>
 
       <div className="p-4 space-y-3">
-        {entries.map((entry, idx) => (
+        {entries.map((entry, idx) => {
+          const visibleInvoices = entry.invoiceQuery
+            ? entry.available_invoices.filter((iv) => iv.invoice_number.toLowerCase().includes(entry.invoiceQuery.toLowerCase()))
+            : entry.available_invoices;
+          return (
           <div key={idx} className="border border-gray-100 rounded-sm p-3 space-y-2">
             <div className="flex items-center gap-2">
               <div className="flex-1">
@@ -229,8 +315,13 @@ export default function PaymentDistributionCard({
 
             {entry.customer_name && (
               <div className="pl-1">
-                <div className="text-[10px] font-black uppercase tracking-wider text-gray-400 mb-1">
-                  Active invoices for {entry.customer_name} — check one, then enter the amount against it
+                <div className="flex items-center justify-between gap-3 mb-1">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-gray-400">
+                    Active invoices for {entry.customer_name} — check one, then enter the amount against it
+                  </div>
+                  {entry.invoices.length > 0 && (
+                    <span className="text-[10px] font-black text-indigo-700 shrink-0">{entry.invoices.length} selected</span>
+                  )}
                 </div>
                 {entry.invoicesLoading ? (
                   <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
@@ -239,33 +330,67 @@ export default function PaymentDistributionCard({
                 ) : entry.available_invoices.length === 0 ? (
                   <p className="text-[11px] text-gray-400 italic">No open invoices with remaining balance for this customer.</p>
                 ) : (
-                  <div className="space-y-1">
-                    {entry.available_invoices.map((iv) => {
+                  <div className="space-y-1.5">
+                    <div className="relative">
+                      <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="text"
+                        value={entry.invoiceQuery}
+                        onChange={(e) => updateRow(idx, { invoiceQuery: e.target.value })}
+                        placeholder="Search invoices…"
+                        className="w-full text-[11px] font-medium border border-gray-300 rounded-xs pl-7 pr-7 py-1.5 outline-none focus:border-indigo-400"
+                      />
+                      {entry.invoiceQuery && (
+                        <button type="button" onClick={() => updateRow(idx, { invoiceQuery: "" })}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 cursor-pointer">
+                          <X size={11} />
+                        </button>
+                      )}
+                    </div>
+                    {visibleInvoices.length === 0 ? (
+                      <p className="text-[11px] text-gray-400 italic">No invoice matches your search.</p>
+                    ) : visibleInvoices.map((iv) => {
                       const selected = entry.invoices.find((sel) => sel.invoice_number === iv.invoice_number);
                       const checked = !!selected;
+                      const grade = checked ? gradeInvoice(selected!.amount, selected!, tolerancePct) : null;
                       return (
                         <div key={iv.invoice_number}
-                          className={`flex items-center justify-between gap-2 text-[11px] px-2 py-1.5 rounded-sm border ${
+                          className={`px-2 py-1.5 rounded-sm border ${
                             checked ? "bg-indigo-50 border-indigo-300" : "bg-white border-gray-100 hover:border-gray-200"
                           }`}>
-                          <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                            <span className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${checked ? "bg-indigo-600 border-indigo-600" : "border-gray-300"}`}>
-                              {checked && <Check size={11} className="text-white" />}
-                            </span>
-                            <input type="checkbox" className="hidden" checked={checked} onChange={() => toggleInvoice(idx, iv)} />
-                            <span className="font-mono font-semibold text-primary truncate">{iv.invoice_number}</span>
-                            <span className="font-mono text-gray-400 shrink-0">
-                              (outstanding: {iv.outstanding_amount.toLocaleString()} {iv.currency})
-                            </span>
-                          </label>
-                          {checked && (
-                            <input
-                              type="number" step="0.01"
-                              value={selected!.amount}
-                              onChange={(e) => updateInvoiceAmount(idx, iv.invoice_number, e.target.value)}
-                              placeholder="Amount"
-                              className="w-28 shrink-0 text-xs font-mono px-2 py-1 border border-indigo-200 rounded-sm bg-white"
-                            />
+                          <div className="flex items-center justify-between gap-2 text-[11px]">
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <span className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${checked ? "bg-indigo-600 border-indigo-600" : "border-gray-300"}`}>
+                                {checked && <Check size={11} className="text-white" />}
+                              </span>
+                              <input type="checkbox" className="hidden" checked={checked} onChange={() => toggleInvoice(idx, iv)} />
+                              <span className="font-mono font-semibold text-primary truncate">{iv.invoice_number}</span>
+                              <span className="font-mono text-gray-400 shrink-0">
+                                (outstanding: {iv.outstanding_amount.toLocaleString()} {iv.currency})
+                              </span>
+                            </label>
+                            {checked && (
+                              <input
+                                type="number" step="0.01"
+                                value={selected!.amount}
+                                onChange={(e) => updateInvoiceAmount(idx, iv.invoice_number, e.target.value)}
+                                placeholder="Amount"
+                                className="w-28 shrink-0 text-xs font-mono px-2 py-1 border border-indigo-200 rounded-sm bg-white"
+                              />
+                            )}
+                          </div>
+                          {grade && (
+                            <div className={`mt-1 pl-6 text-[10px] font-semibold ${
+                              grade.tone === "red" ? "text-red-600" : grade.tone === "amber" ? "text-amber-700" : "text-emerald-700"
+                            }`}>
+                              {iv.is_cross_currency && iv.fx_rate && "converted" in grade && (
+                                <span className="font-mono">
+                                  ≈ {fmt(grade.converted)} {iv.currency} @ {iv.fx_rate}
+                                  {" — "}
+                                </span>
+                              )}
+                              {grade.label}
+                            </div>
                           )}
                         </div>
                       );
@@ -275,7 +400,8 @@ export default function PaymentDistributionCard({
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
 
         <button onClick={addRow} className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-indigo-600 hover:text-indigo-800 cursor-pointer">
           <Plus size={13} /> Add customer

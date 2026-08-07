@@ -19,7 +19,7 @@
  * needs to render it unconditionally and pass a callback to refresh the
  * row after a successful mapping.
  */
-import { AlertTriangle, Check, CheckCircle2, Hash, Loader2 } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, Hash, Loader2, Search, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   getMappingOptions, getInvoicesForCustomer, previewManualMapping, confirmManualMapping,
@@ -83,6 +83,7 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
   const [selectedCustomerForMapping, setSelectedCustomerForMapping] = useState("");
   const [customerInvoiceOptions, setCustomerInvoiceOptions]         = useState<MappingInvoiceOption[]>([]);
   const [selectedInvoiceNumbers, setSelectedInvoiceNumbers]         = useState<Set<string>>(new Set());
+  const [invoiceQuery, setInvoiceQuery]                 = useState("");
   const [mappingPreview, setMappingPreview]             = useState<MappingPreviewResponse | null>(null);
   const [mappingPreviewError, setMappingPreviewError]   = useState("");
   const [mappingPreviewLoading, setMappingPreviewLoading] = useState(false);
@@ -103,6 +104,7 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
     setMappingOptionsError("");
     setSelectedCustomerForMapping("");
     setSelectedInvoiceNumbers(new Set());
+    setInvoiceQuery("");
     setMappingPreview(null);
     try {
       const res = await getMappingOptions(recordId);
@@ -123,6 +125,7 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
   const handleSelectCustomerForMapping = async (customerName: string) => {
     setSelectedCustomerForMapping(customerName);
     setSelectedInvoiceNumbers(new Set());
+    setInvoiceQuery("");
     setMappingPreview(null);
     setMappingOptionsError("");
     if (!customerName) { setCustomerInvoiceOptions([]); return; }
@@ -180,6 +183,10 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
     }
     setConfirmMappingLoading(false);
   };
+
+  const visibleInvoices = invoiceQuery
+    ? customerInvoiceOptions.filter((inv) => inv.invoice_number.toLowerCase().includes(invoiceQuery.toLowerCase()))
+    : customerInvoiceOptions;
 
   if (!canManuallyMap) return null;
 
@@ -284,9 +291,32 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
 
               {customerInvoiceOptions.length > 0 ? (
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
-                    Select Invoice(s) — amounts auto-loaded from aging report
-                  </label>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
+                      Select Invoice(s) — amounts auto-loaded from aging report
+                    </label>
+                    {selectedInvoiceNumbers.size > 0 && (
+                      <span className="text-[10px] font-black text-emerald-700 shrink-0">
+                        {selectedInvoiceNumbers.size} selected
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      value={invoiceQuery}
+                      onChange={(e) => setInvoiceQuery(e.target.value)}
+                      placeholder="Search invoices…"
+                      className="w-full text-[11px] font-medium border border-gray-300 rounded-xs pl-7 pr-7 py-1.5 outline-none focus:border-[#222222]"
+                    />
+                    {invoiceQuery && (
+                      <button type="button" onClick={() => setInvoiceQuery("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 cursor-pointer">
+                        <X size={11} />
+                      </button>
+                    )}
+                  </div>
                   <div className="border border-gray-200 rounded-xs overflow-hidden">
                     <table className="w-full text-[11px]">
                       <thead>
@@ -298,7 +328,9 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {customerInvoiceOptions.map((inv) => (
+                        {visibleInvoices.length === 0 ? (
+                          <tr><td colSpan={4} className="px-3 py-3 text-[11px] text-gray-400 italic">No invoice matches your search.</td></tr>
+                        ) : visibleInvoices.map((inv) => (
                           <tr key={inv.invoice_number}
                             className="hover:bg-blue-50/30 cursor-pointer"
                             onClick={() => toggleInvoiceForMapping(inv.invoice_number)}>
