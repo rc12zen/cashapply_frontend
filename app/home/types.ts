@@ -69,6 +69,106 @@ export const isAccountRunnable = (g: AccountGroup): boolean =>
   g.bank_account_id != null && g.pending_row_count > 0;
 
 /**
+ * ── Run preflight (GET /api/run/preflight) ─────────────────────────────────
+ * Backs ConfirmRunDialog. An analysis run is IRREVERSIBLE — the orchestrator
+ * stamps consumed_by_run_id on every row it processes and /start refuses to
+ * run an account with no unconsumed rows left, so there is no undo and no
+ * re-run. That makes the confirm dialog the last place a wrong run can be
+ * caught, which is why the backend resolves the FULL run context here (the
+ * settings that actually shape the results, not just which accounts are in
+ * scope) and returns it in one payload.
+ *
+ * `blockers` mirror what POST /run/start itself rejects — a preview of a real
+ * refusal, never a second opinion that could disagree with it. `warnings` are
+ * things that will degrade the results but not stop the run; the person
+ * decides. `can_start` is simply `blockers.length === 0`.
+ */
+export interface PreflightCreditRule {
+  type: "amount_positive" | "column_not_blank" | "flag_matches" | string;
+  column: string;
+  pattern: string | null;
+  description: string;
+}
+
+export interface PreflightRecipe {
+  format: string;              // xlsx | xls | csv | pdf
+  recipe_version: number;
+  credit_rule: PreflightCreditRule | null;
+}
+
+export interface PreflightAccount extends AccountGroup {
+  runnable: boolean;
+  /** OrganizationUnit.functional_currency — what every amount converts INTO. */
+  functional_currency: string | null;
+  /** BankAccount.currency — the statement's own currency. Unrelated to above. */
+  account_currency: string | null;
+  /** Extra Business Units for a multi-BU account (primary is business_unit). */
+  additional_business_units: { ou_name: string; ou_number: string; functional_currency: string }[];
+  /** Latest recipe per file format this run actually uses. */
+  credit_rules: PreflightRecipe[];
+  /** Sum of credit_amount over the unconsumed rows, in account_currency. */
+  pending_credit_total: number | null;
+  /** statement_date span of the unconsumed rows (ISO), null if undated. */
+  pending_date_from: string | null;
+  pending_date_to: string | null;
+  /** Most recent run that consumed any row of this account (any state). */
+  last_run_id: number | null;
+  last_run_at: string | null;
+}
+
+export interface PreflightIssue {
+  code: string;
+  message: string;
+  accounts?: string[];
+}
+
+export interface PreflightSettlementIdentifier {
+  id: number;
+  pattern: string | null;
+  provider_name: string | null;
+  sub_customer_count: number;
+}
+
+export interface RunPreflight {
+  // NOTE: the backend re-derives these from the selected filenames rather than
+  // trusting the client's grouping, so this list is authoritative — the dialog
+  // renders it directly instead of the locally-built AccountGroup[].
+  accounts: PreflightAccount[];
+  totals: {
+    accounts: number;
+    runnable_accounts: number;
+    statements: number;
+    pending_rows: number;
+    /** Rows skipped as already-ingested duplicates on this upload. */
+    duplicate_rows_ignored: number;
+    /** Total incoming money grouped by statement currency (never summed across). */
+    credit_by_currency: Record<string, number>;
+    /** Widest statement-date span across all runnable accounts (ISO). */
+    date_from: string | null;
+    date_to: string | null;
+  };
+  context: {
+    aging: { loaded: boolean; row_count: number; filename: string | null; loaded_at: string | null };
+    ai: {
+      provider: string | null; model: string | null;
+      enabled: boolean; configured: boolean; active: boolean;
+      message: string | null;
+    };
+    settlement_identifiers: {
+      third_party_provider?: PreflightSettlementIdentifier[];
+      card_narrative?:       PreflightSettlementIdentifier[];
+      cheque_narrative?:     PreflightSettlementIdentifier[];
+    };
+    tolerances: { short_payment_tolerance_pct: number };
+  };
+  /** Statements whose rows span several accounts — all processed together. */
+  multi_account_files: string[];
+  blockers: PreflightIssue[];
+  warnings: PreflightIssue[];
+  can_start: boolean;
+}
+
+/**
  * One uploaded STATEMENT, with every account its rows belong to.
  *
  * The Account Statements list is about files — a person uploads one file and

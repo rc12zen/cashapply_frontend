@@ -21,7 +21,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import {deleteFile,
   getAgingHistory, getAgingStatus, getAiStatus, getFiles, getIngestStatus, getRunHistory,
-  getPendingByAccount, getMe,
+  getPendingByAccount, getMe, getRunPreflight,
   getStatus, reingestStatement, selectAgingSource, startRun,
   uploadStatement,
 } from "@/lib/api";
@@ -41,6 +41,7 @@ import ConfirmRunDialog from "./components/ConfirmRunDialog";
 
 import {
   type ConfigCandidate, type FileInfo, type AccountGroup, type StatementGroup,
+  type RunPreflight,
   isAccountRunnable,
 } from "./types";
 import { formatGreetingName } from "@/lib/formatName";
@@ -214,11 +215,41 @@ export default function Dashboard() {
   const [lastRunFiles, setLastRunFiles] = useState<string[]>([]);
   const [lastRunId, setLastRunId] = useState<number | null>(null);
   // Confirm-before-run: populated by handleStart() once validation passes,
-  // so the person sees exactly which accounts/OUs/Business Units this run
-  // will process BEFORE it actually starts -- see ConfirmRunDialog. The
-  // real POST /run/start only fires from confirmAndStartRun(), never
-  // directly from handleStart().
-  const [confirmRun, setConfirmRun] = useState<{ groups: AccountGroup[]; filenames: string[] } | null>(null);
+  // so the person reviews the FULL run context before it actually starts --
+  // see ConfirmRunDialog. The real POST /run/start only fires from
+  // confirmAndStartRun(), never directly from handleStart().
+  //
+  // Only the filenames are held here. Everything the dialog shows comes from
+  // GET /api/run/preflight, fetched fresh when the dialog opens: the backend
+  // re-derives the accounts from these filenames and resolves the settings
+  // that will actually shape the run (functional currency, credit rule, aging
+  // report, AI state, settlement identifiers, tolerances) plus its own
+  // blockers/warnings. Deliberately NOT the locally-built AccountGroup[] --
+  // an analysis run can't be undone, so the review has to reflect server
+  // state at confirm time, not a page-load snapshot that may since have gone
+  // stale (another user's run, a Business Unit reassignment, aging report
+  // swapped out).
+  const [confirmRun, setConfirmRun] = useState<{ filenames: string[] } | null>(null);
+  const [preflight, setPreflight] = useState<RunPreflight | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightError, setPreflightError] = useState("");
+
+  // Fetch (or re-fetch, via the dialog's Retry) the preflight review. On
+  // failure the dialog shows the error and keeps Start disabled -- failing
+  // closed, since starting an irreversible run on an unverified picture is
+  // exactly the mistake this dialog exists to prevent.
+  const loadPreflight = useCallback(async (filenames: string[]) => {
+    setPreflightLoading(true);
+    setPreflightError("");
+    try {
+      const res = await getRunPreflight(filenames);
+      setPreflight(res.data);
+    } catch (e: any) {
+      setPreflight(null);
+      setPreflightError(getErrorMessage(e, "the check could not be completed."));
+    }
+    setPreflightLoading(false);
+  }, []);
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -634,15 +665,22 @@ export default function Dashboard() {
       new Set(runnableSelected.flatMap((g) => g.files.map((f) => f.filename))));
     setError("");
     // PATCH: no longer starts the run directly here — opens the confirm
-    // dialog instead (see ConfirmRunDialog), showing exactly which
-    // accounts/OUs/Business Units this run will process. The actual
-    // POST /run/start only happens from confirmAndStartRun() below, once
-    // the person explicitly confirms.
-    setConfirmRun({ groups: runnableSelected, filenames: selectedFilenames });
+    // dialog instead (see ConfirmRunDialog) and kicks off the preflight
+    // review of everything this run will do. The actual POST /run/start
+    // only happens from confirmAndStartRun() below, once the person has
+    // reviewed that and explicitly acknowledged it can't be undone.
+    setPreflight(null);
+    setConfirmRun({ filenames: selectedFilenames });
+    loadPreflight(selectedFilenames);
   };
 
   const confirmAndStartRun = async () => {
     if (!confirmRun) return;
+    // Belt-and-braces: the dialog already disables Start unless preflight
+    // loaded cleanly and can_start is true. /run/start enforces the real
+    // guards server-side regardless — this just makes the client incapable
+    // of firing a request the review said was blocked.
+    if (!preflight?.can_start) return;
     setRunCompletionSummary(null);
     setLoading(true);
     try {
@@ -948,10 +986,13 @@ export default function Dashboard() {
 				{/* Confirm-before-run dialog */}
 				{confirmRun && (
 					<ConfirmRunDialog
-						groups={confirmRun.groups}
+						preflight={preflight}
+						preflightLoading={preflightLoading}
+						preflightError={preflightError}
 						loading={loading}
-						onCancel={() => setConfirmRun(null)}
+						onCancel={() => { setConfirmRun(null); setPreflight(null); setPreflightError(""); }}
 						onConfirm={confirmAndStartRun}
+						onRetryPreflight={() => loadPreflight(confirmRun.filenames)}
 					/>
 				)}
 
