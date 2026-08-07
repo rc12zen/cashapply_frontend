@@ -772,11 +772,18 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   };
 
   // ── Column auto-wiring on entering step 3 ────────────────────────────────────
-  const lastAutoWireRef = useRef<number>(-1);
+  const lastAutoWireRef = useRef<string>("");
   useEffect(() => {
     if (step !== 3 || columns.length === 0) return;
-    if (lastAutoWireRef.current === headerRow) return;
-    lastAutoWireRef.current = headerRow ?? -1;
+    // Re-guess whenever the underlying COLUMNS change (new file / sheet / header
+    // row). Keying on headerRow alone skipped a freshly-uploaded statement whose
+    // header landed on the SAME row index as the previous one, leaving its
+    // mappings un-wired (the "works for the first statement, not the next" bug).
+    // Column CONTENT changes only when the file/sheet/header changes — never when
+    // the user manually remaps — so this still preserves manual edits on revisit.
+    const sig = `${headerRow ?? -1}${columns.join("")}`;
+    if (lastAutoWireRef.current === sig) return;
+    lastAutoWireRef.current = sig;
 
     const colsLower = columns.map((c) => (c ?? "").toLowerCase());
     // Tokenise on non-alphanumerics so short markers (cr, dr, ref) match as whole
@@ -818,6 +825,24 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       (i) => hasSub(i, "reference"),
       (i) => hasTok(i, "ref"),
     );
+    // Currency: a dedicated column (e.g. "CURRENCY", "CCY"). Statements that
+    // carry currency in a metadata cell instead fall back to the cell default
+    // below (the SPOC can still repoint it).
+    const currencyCol = pick(
+      (i) => hasTok(i, "currency") || hasTok(i, "ccy"),
+      (i) => hasSub(i, "currency") || hasSub(i, "curr"),
+    );
+    // Account number: a per-row account column (e.g. "ACCOUNT", "Account No").
+    // Excludes name/holder/type columns and routing-number columns (e.g. "ABA
+    // NUMBER" tokenises without "account", so it isn't matched). Falls back to
+    // the metadata-cell default below for statements whose account sits above
+    // the header (the Locate Account step is the authoritative identity anyway).
+    const accountCol = pick(
+      (i) => hasSub(i, "account number") || hasSub(i, "account no")
+             || hasSub(i, "acct no") || hasSub(i, "a/c no") || hasSub(i, "a/c number"),
+      (i) => (hasTok(i, "account") || hasTok(i, "acct"))
+             && !hasSub(i, "name") && !hasSub(i, "holder") && !hasSub(i, "type"),
+    );
     // Bank name: a column whose header names the bank (excluding bank-reference/
     // -account/-branch/-code columns that merely contain the word "bank").
     const bankCol = pick(
@@ -843,6 +868,13 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       date:          { type: "column", name: dateCol },
       narrative:     { type: "column", name: narrativeCol },
       credit_amount: { type: "column", name: creditCol },
+      // Currency / account: a detected COLUMN when present (e.g. PNC-style files
+      // where both are per-row columns); otherwise the metadata-cell default, so
+      // cell-based layouts (e.g. Standard Chartered) keep working. Reset to the
+      // default rather than keeping `prev` so a stale column name from a
+      // previously-configured file can't linger on a freshly-uploaded one.
+      currency:      currencyCol ? { type: "column", name: currencyCol } : { type: "cell", row: 2, col: 1 },
+      account_number: accountCol ? { type: "column", name: accountCol } : { type: "cell", row: 1, col: 1 },
       // Only auto-fill the reference when we actually spot one; otherwise leave it
       // unselected so the user consciously picks a column or "Not in this file".
       bank_reference: refCol ? { type: "column", name: refCol } : prev.bank_reference,
