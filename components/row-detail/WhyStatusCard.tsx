@@ -12,7 +12,7 @@
 import { AlertTriangle, CheckCircle2, GitBranch, Info } from "lucide-react";
 import { CardShell, CardHead } from "@/components/row-detail/SharedCardPieces";
 import CrossOUEvidencePanel from "@/components/row-detail/CrossOUEvidencePanel";
-import { ConfirmedInvoice, OuEvidence, fmt } from "@/components/row-detail/types";
+import { ConfirmedInvoice, OuEvidence, FxView, fmt } from "@/components/row-detail/types";
 
 const TONE_STYLE = {
   ok:    "bg-emerald-50 border-emerald-200 text-emerald-800",
@@ -30,7 +30,7 @@ const TONE_ICON = {
 export default function WhyStatusCard({
   reasonConfig, isCrossOU, ouEvidence, extractedCustomerName,
   bankOuDisplayName, bankBusinessUnit, bankOuNumber,
-  confirmedInvoices, sumOutstanding, creditAmount, bankCurrency,
+  confirmedInvoices, sumOutstanding, creditAmount, bankCurrency, fx,
 }: {
   reasonConfig: { text: string; tone: "ok" | "warn" | "error" | "info" };
   isCrossOU: boolean;
@@ -43,7 +43,18 @@ export default function WhyStatusCard({
   sumOutstanding: number;
   creditAmount: number;
   bankCurrency: string;
+  fx?: FxView;
 }) {
+  // The comparison MUST be same-currency. sumOutstanding is in invoice
+  // currency; creditAmount is in credited currency. Compare against the
+  // credited amount CONVERTED to invoice currency (fx.credit_amount_invoice_ccy,
+  // the same value the rule engine used to decide the short-payment band).
+  // Falls back to the raw credited amount only when the backend sent no fx
+  // block (older build) — same currency in that case anyway.
+  const receivedInInvoiceCcy = fx ? fx.credit_amount_invoice_ccy : creditAmount;
+  const invoiceCcy = fx?.invoice_currency || confirmedInvoices[0]?.currency || bankCurrency;
+  const showConversion = !!(fx && fx.is_cross_currency && fx.fx_credit_to_invoice);
+  const diff = sumOutstanding - receivedInInvoiceCcy;
   return (
     <CardShell>
       <CardHead icon={<Info size={13} />} title="Why this status" />
@@ -97,23 +108,34 @@ export default function WhyStatusCard({
               <div className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-1.5">Amount Received</div>
               <div className="font-mono font-black text-[#222222] text-[18px] leading-none">{fmt(creditAmount)}</div>
               <div className="text-[10px] text-gray-400 font-bold mt-1">{bankCurrency}</div>
+              {/* Cross-currency: show the invoice-currency equivalent + the Leg 1
+                  rate used, so the comparison below is auditable rather than a
+                  bare converted number. */}
+              {showConversion && (
+                <div className="text-[10px] text-gray-500 font-bold mt-2 pt-2 border-t border-gray-200">
+                  = <span className="font-mono text-[#222222]">{fmt(receivedInInvoiceCcy)} {invoiceCcy}</span>
+                  <span className="ml-1.5 opacity-70">@ {fmt(fx!.fx_credit_to_invoice, 4)}{fx!.fx_credit_to_invoice_source ? ` (${fx!.fx_credit_to_invoice_source})` : ""}</span>
+                </div>
+              )}
             </div>
             <div className="bg-gray-50 border border-gray-200 rounded-xs px-4 py-3">
               <div className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-1.5">Invoice Outstanding</div>
               <div className="font-mono font-black text-[#222222] text-[18px] leading-none">{fmt(sumOutstanding)}</div>
-              <div className="text-[10px] text-gray-400 font-bold mt-1">{confirmedInvoices[0]?.currency || bankCurrency}</div>
+              <div className="text-[10px] text-gray-400 font-bold mt-1">{invoiceCcy}</div>
             </div>
 
-            {/* Difference row */}
-            {Math.abs(sumOutstanding - creditAmount) > 0.01 ? (
-              <div className={`col-span-2 flex items-center justify-between px-4 py-2.5 rounded-xs border ${creditAmount < sumOutstanding ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200"}`}>
-                <span className={`text-[10px] font-black uppercase tracking-wider ${creditAmount < sumOutstanding ? "text-amber-700" : "text-red-700"}`}>
-                  {creditAmount < sumOutstanding ? "Short by" : "Over by"}
+            {/* Difference row — always compared in invoice currency
+                (receivedInInvoiceCcy vs sumOutstanding), never raw credited
+                against invoice-currency outstanding. */}
+            {Math.abs(diff) > 0.01 ? (
+              <div className={`col-span-2 flex items-center justify-between px-4 py-2.5 rounded-xs border ${diff > 0 ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200"}`}>
+                <span className={`text-[10px] font-black uppercase tracking-wider ${diff > 0 ? "text-amber-700" : "text-red-700"}`}>
+                  {diff > 0 ? "Short by" : "Over by"}
                 </span>
-                <span className={`font-mono font-black text-[14px] ${creditAmount < sumOutstanding ? "text-amber-700" : "text-red-700"}`}>
-                  {fmt(Math.abs(sumOutstanding - creditAmount))}
+                <span className={`font-mono font-black text-[14px] ${diff > 0 ? "text-amber-700" : "text-red-700"}`}>
+                  {fmt(Math.abs(diff))} {invoiceCcy}
                   <span className="ml-2 text-[10px] font-bold opacity-70">
-                    ({((Math.abs(sumOutstanding - creditAmount) / sumOutstanding) * 100).toFixed(1)}%)
+                    ({((Math.abs(diff) / sumOutstanding) * 100).toFixed(1)}%)
                   </span>
                 </span>
               </div>

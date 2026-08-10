@@ -16,11 +16,11 @@
 import { useState } from "react";
 import {
   CheckCircle2, ChevronDown, ChevronUp, Loader2, AlertTriangle,
-  X, Split, Settings2, RefreshCw, Code2,
+  X, Split, Settings2, RefreshCw, Code2, RotateCcw,
 } from "lucide-react";
 import type { RowDetail } from "@/components/row-detail/types";
 import {
-  approveDistributionEntry, rejectDistributionEntry, editDistributionEntryGlRate,
+  approveDistributionEntry, rejectDistributionEntry, reopenDistributionEntry, editDistributionEntryGlRate,
 } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
 import EditGlRateModal from "@/components/row-detail/EditGlRateModal";
@@ -55,7 +55,7 @@ function EntryRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showPayload, setShowPayload] = useState(false);
-  const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+  const [busy, setBusy] = useState<"approve" | "reject" | "reopen" | null>(null);
   const [error, setError] = useState("");
   const [showGlRateModal, setShowGlRateModal] = useState(false);
   const [glRateSaving, setGlRateSaving] = useState(false);
@@ -85,6 +85,19 @@ function EntryRow({
       onChanged();
     } catch (e: any) {
       setError(getErrorMessage(e, "Could not reject this entry."));
+    }
+    setBusy(null);
+  };
+
+  const handleReopen = async () => {
+    setBusy("reopen"); setError("");
+    // Backend blocks (with a clear reason) if the invoice is gone from the
+    // current aging report or now claimed by another payment — show that.
+    try {
+      await reopenDistributionEntry(recordId, entry.entry_id);
+      onChanged();
+    } catch (e: any) {
+      setError(getErrorMessage(e, "Could not reopen this entry."));
     }
     setBusy(null);
   };
@@ -152,12 +165,30 @@ function EntryRow({
           </div>
 
           {entry.hitl_status === "rejected" && (
-            <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-sm px-3 py-2">
-              <AlertTriangle size={12} className="text-red-500 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-red-700">
-                Rejected{entry.rejected_by ? ` by ${entry.rejected_by}` : ""}
-                {entry.rejected_reason ? ` — ${entry.rejected_reason}` : ""}
-              </p>
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-sm px-3 py-2">
+                <AlertTriangle size={12} className="text-red-500 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-red-700">
+                  Rejected{entry.rejected_by ? ` by ${entry.rejected_by}` : ""}
+                  {entry.rejected_reason ? ` — ${entry.rejected_reason}` : ""}
+                </p>
+              </div>
+              {error && (
+                <div className="text-[11px] text-red-600 font-semibold bg-red-50 border border-red-200 rounded-sm px-3 py-2">
+                  {error}
+                </div>
+              )}
+              {/* Undo — restores this entry to pending and reuses its existing
+                  receipt. Backend re-validates the invoice first and blocks
+                  with a clear message if it can't be safely re-claimed. */}
+              <button
+                onClick={handleReopen}
+                disabled={busy !== null}
+                className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider px-3 py-1.5 rounded-sm border border-gray-300 text-gray-600 hover:border-indigo-300 hover:text-indigo-600 disabled:opacity-40 cursor-pointer"
+              >
+                {busy === "reopen" ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                Reopen
+              </button>
             </div>
           )}
 

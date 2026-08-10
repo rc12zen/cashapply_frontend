@@ -37,6 +37,13 @@ export const locateAccount = (
 export const testBuilderDraft = (storage_key: string, config_draft: object) =>
   API.post("/api/config/builder/test", { storage_key, config_draft });
 
+// Detect the date format from a sample of the mapped Date column's raw values.
+// Resolves automatically when the data proves the order; returns status
+// "ambiguous" with competing interpretations only when genuinely undecidable
+// (see backend bank_statement/date_inference.py). Stateless — samples only.
+export const inferDateFormat = (samples: string[]) =>
+  API.post("/api/config/builder/infer-date-format", { samples });
+
 export const saveRecipe = (payload: SaveRecipePayload) =>
   API.post("/api/config/builder/save", payload);
 

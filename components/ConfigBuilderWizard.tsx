@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { getBuilderRawPreview, locateAccount, saveRecipe, testBuilderDraft, getAvailableOUs } from "@/lib/configBuilderApi";
+import { getBuilderRawPreview, locateAccount, saveRecipe, testBuilderDraft, getAvailableOUs, inferDateFormat } from "@/lib/configBuilderApi";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { validateFieldSamples, accountReasonForSamples, accountRejectReason, splitAccounts } from "@/lib/configBuilderValidation";
 import { ISO_4217, normalizeCurrency } from "@/lib/currency";
@@ -113,7 +113,37 @@ function fieldSampleValues(
 // while ignoring plain words. The user picks the real one from the found list.
 const AUTO_ACCOUNT_REGEX = "((?=[A-Za-z0-9]*\\d)[A-Za-z0-9]{6,34})";
 
-const DEFAULT_DATE_FORMATS = ["DD/MM/YYYY", "YYYY-MM-DD", "MM/DD/YYYY", "DD-MM-YYYY"];
+// Formats every new bank config is tested/parsed against, tried in order
+// (first match wins — see backend parser.py _parse_date / _FORMAT_MAP).
+// Month-name forms are unambiguous (they never match a numeric date) so they
+// are safe to include; the 2-digit-year forms are appended AFTER their
+// 4-digit counterparts so a 4-digit year is always preferred. Numeric
+// day-first vs month-first ordering deliberately left as-is for now.
+const DEFAULT_DATE_FORMATS = [
+  "DD/MM/YYYY", "YYYY-MM-DD", "MM/DD/YYYY", "DD-MM-YYYY",
+  // month-name (e.g. "04-Aug-2026", "4-Aug-26")
+  "DD-Mon-YYYY", "DD-Mon-YY",
+  // 2-digit-year numeric (e.g. "04/08/26")
+  "DD/MM/YY", "MM/DD/YY", "DD-MM-YY",
+];
+
+// Result of the Column-Mapping-step date-format detector (backend
+// bank_statement/date_inference.py). "resolved" → we store `formats`;
+// "ambiguous" → the SPOC picks one of `choices`; otherwise informational.
+interface DateFormatChoice {
+  id: string;
+  label: string;
+  formats: string[];
+  example: { value: string; date: string };
+}
+interface DateInference {
+  status: "resolved" | "ambiguous" | "unparseable" | "empty";
+  formats?: string[];
+  label?: string;
+  example?: { value: string; date: string };
+  choices?: DateFormatChoice[];
+  detail?: string;
+}
 
 // Plain-language help shown as a tooltip next to each field in Column Mapping.
 const FIELD_HELP: Record<LogicalField, string> = {
@@ -189,6 +219,12 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const [creditRule, setCreditRule] = useState<CreditRuleConfig>({
     type: "column_not_blank", field: "",
   });
+
+  // ── Step 3: Date format (detected in Column Mapping — see StepColumns) ──────────
+  // The exact format list written into the recipe. Starts as the broad default
+  // and is narrowed to the single detected/confirmed format once the Date column
+  // is mapped and the detector resolves it (or the SPOC picks on ambiguity).
+  const [dateFormats, setDateFormats] = useState<string[]>(DEFAULT_DATE_FORMATS);
 
   // ── Step 5: Exclusions ────────────────────────────────────────────────────────
   const [exclusions, setExclusions] = useState<ExclusionRule[]>([]);
@@ -382,10 +418,10 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       },
       exclusions,
       transforms:   {},
-      date_formats: DEFAULT_DATE_FORMATS,
+      date_formats: dateFormats,
     };
   }, [
-    previewData, headerRow, buildSource, fieldMappings, creditRule, exclusions, accountLocator,
+    previewData, headerRow, buildSource, fieldMappings, creditRule, exclusions, accountLocator, dateFormats,
   ]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -736,11 +772,18 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   };
 
   // ── Column auto-wiring on entering step 3 ────────────────────────────────────
-  const lastAutoWireRef = useRef<number>(-1);
+  const lastAutoWireRef = useRef<string>("");
   useEffect(() => {
     if (step !== 3 || columns.length === 0) return;
-    if (lastAutoWireRef.current === headerRow) return;
-    lastAutoWireRef.current = headerRow ?? -1;
+    // Re-guess whenever the underlying COLUMNS change (new file / sheet / header
+    // row). Keying on headerRow alone skipped a freshly-uploaded statement whose
+    // header landed on the SAME row index as the previous one, leaving its
+    // mappings un-wired (the "works for the first statement, not the next" bug).
+    // Column CONTENT changes only when the file/sheet/header changes — never when
+    // the user manually remaps — so this still preserves manual edits on revisit.
+    const sig = `${headerRow ?? -1}${columns.join("")}`;
+    if (lastAutoWireRef.current === sig) return;
+    lastAutoWireRef.current = sig;
 
     const colsLower = columns.map((c) => (c ?? "").toLowerCase());
     // Tokenise on non-alphanumerics so short markers (cr, dr, ref) match as whole
@@ -782,6 +825,24 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       (i) => hasSub(i, "reference"),
       (i) => hasTok(i, "ref"),
     );
+    // Currency: a dedicated column (e.g. "CURRENCY", "CCY"). Statements that
+    // carry currency in a metadata cell instead fall back to the cell default
+    // below (the SPOC can still repoint it).
+    const currencyCol = pick(
+      (i) => hasTok(i, "currency") || hasTok(i, "ccy"),
+      (i) => hasSub(i, "currency") || hasSub(i, "curr"),
+    );
+    // Account number: a per-row account column (e.g. "ACCOUNT", "Account No").
+    // Excludes name/holder/type columns and routing-number columns (e.g. "ABA
+    // NUMBER" tokenises without "account", so it isn't matched). Falls back to
+    // the metadata-cell default below for statements whose account sits above
+    // the header (the Locate Account step is the authoritative identity anyway).
+    const accountCol = pick(
+      (i) => hasSub(i, "account number") || hasSub(i, "account no")
+             || hasSub(i, "acct no") || hasSub(i, "a/c no") || hasSub(i, "a/c number"),
+      (i) => (hasTok(i, "account") || hasTok(i, "acct"))
+             && !hasSub(i, "name") && !hasSub(i, "holder") && !hasSub(i, "type"),
+    );
     // Bank name: a column whose header names the bank (excluding bank-reference/
     // -account/-branch/-code columns that merely contain the word "bank").
     const bankCol = pick(
@@ -807,6 +868,13 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       date:          { type: "column", name: dateCol },
       narrative:     { type: "column", name: narrativeCol },
       credit_amount: { type: "column", name: creditCol },
+      // Currency / account: a detected COLUMN when present (e.g. PNC-style files
+      // where both are per-row columns); otherwise the metadata-cell default, so
+      // cell-based layouts (e.g. Standard Chartered) keep working. Reset to the
+      // default rather than keeping `prev` so a stale column name from a
+      // previously-configured file can't linger on a freshly-uploaded one.
+      currency:      currencyCol ? { type: "column", name: currencyCol } : { type: "cell", row: 2, col: 1 },
+      account_number: accountCol ? { type: "column", name: accountCol } : { type: "cell", row: 1, col: 1 },
       // Only auto-fill the reference when we actually spot one; otherwise leave it
       // unselected so the user consciously picks a column or "Not in this file".
       bank_reference: refCol ? { type: "column", name: refCol } : prev.bank_reference,
@@ -900,6 +968,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                 <StepColumns {...{
                   columns, fieldMappings, setFieldMappings,
                   activeRows, headerRow, subHeaderRow,
+                  dateFormats, onDateFormatsChange: setDateFormats,
                 }} />
               )}
               {step === 4 && (
@@ -1250,6 +1319,9 @@ interface ColumnMapperProps {
   activeRows: string[][];
   headerRow: number | null;
   subHeaderRow: number | null;
+  // Date-format detection (owned by StepColumns; the inner mappers ignore these).
+  dateFormats?: string[];
+  onDateFormatsChange?: (formats: string[]) => void;
 }
 
 // Per-field colour + short label for the click-to-map grid. Full static class
@@ -1353,8 +1425,125 @@ function PreviewGrid({
 // StepColumns is a thin shell around two interchangeable mappers that both edit
 // the same `fieldMappings` state: the new click-to-map grid (default) and the
 // original per-field dropdowns (fallback). A toggle switches between them.
+// Date-format detection panel for the Column Mapping step. Shows the detected
+// format once the Date column is mapped; when the sample is genuinely ambiguous
+// (day-first vs month-first can't be proven from the data), asks the SPOC to
+// pick. See backend bank_statement/date_inference.py.
+function DateFormatPanel({
+  inference, chosenId, onPick,
+}: {
+  inference: DateInference | null;
+  chosenId: string | null;
+  onPick: (c: DateFormatChoice) => void;
+}) {
+  if (!inference || inference.status === "empty") return null;
+
+  if (inference.status === "resolved") {
+    return (
+      <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+        <Check size={13} className="text-emerald-600 shrink-0 mt-px" />
+        <div className="text-[11px] text-emerald-800">
+          <span className="font-black uppercase tracking-wider">Date format detected: {inference.label}</span>
+          {inference.example && (
+            <span className="ml-1 font-mono text-emerald-700">
+              (e.g. {inference.example.value} → {inference.example.date})
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (inference.status === "ambiguous") {
+    return (
+      <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 space-y-2">
+        <div className="flex items-start gap-2">
+          <AlertTriangle size={13} className="text-amber-600 shrink-0 mt-px" />
+          <div className="text-[11px] text-amber-800">
+            <span className="font-black uppercase tracking-wider">Date format is ambiguous — please choose</span>
+            <p className="mt-0.5 normal-case">{inference.detail}</p>
+          </div>
+        </div>
+        <div className="space-y-1 pl-5">
+          {(inference.choices ?? []).map((c) => (
+            <label key={c.id} className="flex items-center gap-2 text-[11px] cursor-pointer">
+              <input
+                type="radio"
+                name="date-format-choice"
+                checked={chosenId === c.id}
+                onChange={() => onPick(c)}
+                className="cursor-pointer"
+              />
+              <span className="font-black text-amber-900">{c.label}</span>
+              <span className="font-mono text-amber-700">→ {c.example.value} = {c.example.date}</span>
+            </label>
+          ))}
+        </div>
+        {!chosenId && (
+          <p className="text-[10px] font-bold text-amber-700 pl-5">⚠ Choose one to lock in the correct interpretation.</p>
+        )}
+      </div>
+    );
+  }
+
+  // unparseable
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+      <AlertTriangle size={13} className="text-amber-600 shrink-0 mt-px" />
+      <div className="text-[11px] text-amber-800 normal-case">{inference.detail}</div>
+    </div>
+  );
+}
+
 function StepColumns(props: ColumnMapperProps) {
   const [viewMode, setViewMode] = useState<"preview" | "dropdown">("preview");
+
+  const { columns, fieldMappings, activeRows, headerRow, subHeaderRow, onDateFormatsChange } = props;
+
+  // Raw values of whatever column Date is mapped to — many rows (max 40) so the
+  // evidence-based detector has enough to prove day/month order when possible.
+  const dateSamples = useMemo(
+    () => fieldSampleValues(fieldMappings.date, columns, activeRows, headerRow ?? 0, subHeaderRow, 40),
+    [fieldMappings.date, columns, activeRows, headerRow, subHeaderRow],
+  );
+  const samplesKey = dateSamples.join("|");
+
+  const [inference, setInference] = useState<DateInference | null>(null);
+  const [chosenId, setChosenId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setChosenId(null);
+    if (dateSamples.length === 0) {
+      setInference(null);
+      onDateFormatsChange?.(DEFAULT_DATE_FORMATS);   // Date not mapped yet — keep broad default
+      return;
+    }
+    inferDateFormat(dateSamples)
+      .then((res) => {
+        if (cancelled) return;
+        const inf = res.data as DateInference;
+        setInference(inf);
+        if (inf.status === "resolved" && inf.formats?.length) {
+          onDateFormatsChange?.(inf.formats);            // lock in the single detected format
+        } else {
+          // ambiguous or unparseable → reset to the broad default (so a stale
+          // single format from a previously-mapped column can't leak through);
+          // for "ambiguous" the SPOC's pick below then narrows it.
+          onDateFormatsChange?.(DEFAULT_DATE_FORMATS);
+        }
+      })
+      .catch(() => { if (!cancelled) setInference(null); });
+    return () => { cancelled = true; };
+    // samplesKey encodes dateSamples' content; onDateFormatsChange is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [samplesKey]);
+
+  const pickChoice = (c: DateFormatChoice) => {
+    setChosenId(c.id);
+    onDateFormatsChange?.(c.formats);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
@@ -1379,6 +1568,7 @@ function StepColumns(props: ColumnMapperProps) {
           ))}
         </div>
       </div>
+      <DateFormatPanel inference={inference} chosenId={chosenId} onPick={pickChoice} />
       {viewMode === "preview"
         ? <PreviewColumnMapper {...props} />
         : <DropdownColumnMapper {...props} />}

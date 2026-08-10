@@ -304,8 +304,14 @@ export const getRunSummary = (runId: number) =>
  *                        (invoice_number, customer_name, outstanding_amount,
  *                         currency, ou_number, invoice_date,
  *                         remittance_amount, computed_amount)
- *   sum_outstanding — Sum of outstanding across all confirmed invoices
- *   credit_amount   — Bank credited amount
+ *   sum_outstanding — Sum of outstanding across all confirmed invoices (invoice ccy)
+ *   credit_amount   — Bank credited amount (credited ccy — raw, not converted)
+ *   fx              — Currency-aware view of the credited amount. Use
+ *                     fx.credit_amount_invoice_ccy (credited amount converted to
+ *                     invoice currency) for any comparison against sum_outstanding.
+ *                     {is_cross_currency, credited_currency, invoice_currency,
+ *                      credit_amount_credited_ccy, credit_amount_invoice_ccy,
+ *                      fx_credit_to_invoice, fx_credit_to_invoice_source}
  *   pipeline        — Ordered nodes for visual flowchart
  *                     [{key, label, status: passed|failed|skipped|pending, detail}]
  *   oracle          — Payload + Oracle response fields after Processed:
@@ -398,6 +404,11 @@ export const purgeSystemLogs  = () => API.delete("/api/activity-log/purge-system
 export const getPendingHitl     = ()                             => API.get("/api/hitl/pending");
 export const getApprovalPreview = (id: number)                   => API.get(`/api/hitl/preview/${id}`);
 export const rejectEntry        = (id: number, comment?: string) => API.post(`/api/hitl/reject/${id}`, { comment });
+// Undo a rejection — restores the row to the state it was rejected from and
+// reuses its existing Oracle receipt. See hitl/service.py's reopen_row().
+// Backend blocks (400/409) with a clear message if the row isn't rejected,
+// was changed concurrently, or its invoice can no longer be safely re-claimed.
+export const reopenEntry        = (id: number, comment?: string) => API.post(`/api/hitl/reopen/${id}`, { comment });
 // Unidentified rows only — see hitl/service.py's mark_eligible_for_receipt()
 // / discard_row(). markEligible creates the bare Oracle receipt now (held
 // back automatically by Step 4.5 for unidentified rows); discardEntry moves
@@ -420,6 +431,8 @@ export const approveDistributionEntry = (id: number, entryId: string, comment?: 
   API.post(`/api/hitl/distribution-entry-approve/${id}/${entryId}`, { comment });
 export const rejectDistributionEntry  = (id: number, entryId: string, comment?: string) =>
   API.post(`/api/hitl/distribution-entry-reject/${id}/${entryId}`, { comment });
+export const reopenDistributionEntry  = (id: number, entryId: string, comment?: string) =>
+  API.post(`/api/hitl/distribution-entry-reopen/${id}/${entryId}`, { comment });
 export const editDistributionEntryGlRate = (id: number, entryId: string, newRate: number, reason?: string) =>
   API.put(`/api/hitl/distribution-entry-gl-rate/${id}/${entryId}`, { new_rate: newRate, reason });
 // Cross-ledger-currency rows only, before invoice mapping — see

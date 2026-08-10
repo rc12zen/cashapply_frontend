@@ -14,14 +14,15 @@ import { Building2, CheckCircle2, X } from "lucide-react";
 import { CardShell, CardHead } from "@/components/row-detail/SharedCardPieces";
 import { OraclePayloadTable } from "@/components/row-detail/OraclePayloadTable";
 import { RawResponseViewer } from "@/components/row-detail/RawResponseViewer";
-import { RowDetail } from "@/components/row-detail/types";
+import { RowDetail, FxView } from "@/components/row-detail/types";
 
 export default function OracleFusionCard({
-  oracle, creditAmount, hasOraclePayload,
+  oracle, creditAmount, hasOraclePayload, fx,
 }: {
   oracle: RowDetail["oracle"];
   creditAmount: number;
   hasOraclePayload: boolean;
+  fx?: FxView;
 }) {
   return (
     <CardShell>
@@ -64,7 +65,7 @@ export default function OracleFusionCard({
       />
       {hasOraclePayload ? (
         <div className="px-5 py-5 space-y-4">
-          <OraclePayloadTable payload={oracle.payload} creditAmount={creditAmount} />
+          <OraclePayloadTable payload={oracle.payload} creditAmount={creditAmount} fx={fx} />
           {/* Actual Oracle response bodies — separate from the outbound
               payload above. Only present once the corresponding step
               has actually run. */}
