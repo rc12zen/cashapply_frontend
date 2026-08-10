@@ -9,42 +9,37 @@
  * pattern matching. See bff/config_routes.py's /ai-status /
  * extraction/ai_providers.py -- the backend does the real check (a
  * lightweight call to the provider), this just renders it.
+ *
+ * CONTROLLED component: the status is fetched and owned by app/home/page.tsx
+ * (which also GATES upload + analyse on `active` -- fail-closed), so the
+ * badge and the disabled controls always agree on one source of truth. This
+ * component only renders what it's handed and asks the parent to re-check.
  */
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
-import { getAiStatus } from "@/lib/api";
+import { AlertTriangle, CheckCircle2, HelpCircle, Loader2, PowerOff, RefreshCw, XCircle } from "lucide-react";
+import { useState } from "react";
 
-interface AiStatus {
+export interface AiStatus {
   provider: string;
   model: string | null;
+  // false = AI extraction is intentionally turned OFF via .env
+  // (AI_EXTRACTION_ENABLED=false), a neutral local-dev state, NOT an outage.
+  // The gate treats this as "allowed" (upload/analyse proceed regex-only).
+  enabled: boolean;
   configured: boolean;
   active: boolean;
   message: string;
   cached: boolean;
 }
 
-export default function AiStatusBadge() {
-  const [status, setStatus] = useState<AiStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [rechecking, setRechecking] = useState(false);
+interface AiStatusBadgeProps {
+  status: AiStatus | null;   // null = the status call itself failed (not "inactive")
+  loading: boolean;          // initial check in flight
+  rechecking: boolean;       // a forced recheck in flight
+  onRecheck: () => void;     // parent re-fetches with force=true
+}
+
+export default function AiStatusBadge({ status, loading, rechecking, onRecheck }: AiStatusBadgeProps) {
   const [expanded, setExpanded] = useState(false);
-
-  const fetchStatus = async (force: boolean) => {
-    force ? setRechecking(true) : setLoading(true);
-    try {
-      const res = await getAiStatus(force);
-      setStatus(res.data);
-    } catch {
-      setStatus(null);
-    } finally {
-      setLoading(false);
-      setRechecking(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchStatus(false);
-  }, []);
 
   if (loading) {
     return (
@@ -54,10 +49,41 @@ export default function AiStatusBadge() {
     );
   }
 
-  // Fetch itself failed (network/auth) -- don't claim anything either way.
-  if (!status) return null;
+  // The status call itself failed (network/auth/endpoint down). We fail-closed
+  // upstream (upload + analyse are disabled), so — unlike before — we must NOT
+  // stay silent here, or the user sees dead controls with no explanation. Show
+  // an explicit "can't verify" chip with a Recheck.
+  if (!status) {
+    return (
+      <div className="inline-flex flex-col gap-1.5">
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="flex items-center gap-1.5 border rounded-full px-2.5 py-1 cursor-pointer bg-gray-100 text-gray-500 border-gray-200"
+          title="Couldn't reach the AI status check — upload and analysis are paused until it's confirmed available."
+        >
+          <HelpCircle size={12} />
+          <span className="text-[10px] font-black uppercase tracking-wider">AI Status Unknown</span>
+        </button>
+        {expanded && (
+          <div className="max-w-xs text-[11px] text-gray-500 leading-relaxed bg-white border border-gray-100 rounded-lg px-3 py-2 shadow-sm">
+            The AI availability check couldn&rsquo;t be reached. Upload and analysis stay paused until AI is confirmed available.
+            <button
+              onClick={(e) => { e.stopPropagation(); onRecheck(); }}
+              disabled={rechecking}
+              className="flex items-center gap-1 mt-2 text-[10px] font-black uppercase tracking-wider text-gray-400 hover:text-primary cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw size={10} className={rechecking ? "animate-spin" : ""} />
+              {rechecking ? "Checking…" : "Recheck now"}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
-  const tone = status.active
+  const tone = status.enabled === false
+    ? { icon: PowerOff, classes: "bg-slate-100 text-slate-600 border-slate-300", label: "AI Extraction Off" }
+    : status.active
     ? { icon: CheckCircle2, classes: "bg-emerald-50 text-emerald-700 border-emerald-200", label: "AI Extraction Active" }
     : status.configured
     ? { icon: AlertTriangle, classes: "bg-amber-50 text-amber-700 border-amber-200", label: "AI Extraction Unavailable" }
@@ -81,7 +107,7 @@ export default function AiStatusBadge() {
         <div className="max-w-xs text-[11px] text-gray-500 leading-relaxed bg-white border border-gray-100 rounded-lg px-3 py-2 shadow-sm">
           {status.message}
           <button
-            onClick={(e) => { e.stopPropagation(); fetchStatus(true); }}
+            onClick={(e) => { e.stopPropagation(); onRecheck(); }}
             disabled={rechecking}
             className="flex items-center gap-1 mt-2 text-[10px] font-black uppercase tracking-wider text-gray-400 hover:text-primary cursor-pointer disabled:opacity-50"
           >
