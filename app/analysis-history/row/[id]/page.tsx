@@ -61,7 +61,7 @@
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { approveEntry, rejectEntry, reopenEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, settlementOverride } from "@/lib/api";
+import { approveEntry, rejectEntry, reopenEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, settlementOverride, parkOverpayment } from "@/lib/api";
 
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
@@ -78,6 +78,8 @@ import PaymentDistributionCard from "@/components/row-detail/PaymentDistribution
 import DistributedSummaryCard from "@/components/row-detail/DistributedSummaryCard";
 import AgingSnapshotCard from "@/components/row-detail/AgingSnapshotCard";
 import WhyStatusCard from "@/components/row-detail/WhyStatusCard";
+import OverpaymentCard from "@/components/row-detail/OverpaymentCard";
+import HandleOverpaymentModal from "@/components/row-detail/HandleOverpaymentModal";
 import OracleFusionCard from "@/components/row-detail/OracleFusionCard";
 import EditGlRateModal from "@/components/row-detail/EditGlRateModal";
 
@@ -140,6 +142,35 @@ export default function RowDetailPage() {
     try { await reopenEntry(recordId); await fetchDetail(); }
     catch (e: any) { setActionError(formatApiError(e, "Could not reopen this row.")); }
     setActionLoading(false);
+  };
+
+  // An overpaid row has ONE entry point — see HandleOverpaymentModal. The dialog
+  // owns the choice; this component only executes whichever outcome came back.
+  const [parkModalOpen, setParkModalOpen] = useState(false);
+  const [parkBusy, setParkBusy]           = useState(false);
+  const [parkError, setParkError]         = useState<string | null>(null);
+
+  // "Apply & Post" — no state change here. The invoice picker is where the
+  // amounts (and the reason for whatever stays unapplied) are actually decided,
+  // so this just closes the dialog and puts the SPOC in front of it.
+  const handleApplyRoute = () => {
+    setParkModalOpen(false);
+    document.getElementById("manual-mapping-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // "Explain & Close" — records the reason and takes the row out of the queue.
+  // No Oracle call. Errors stay inside the dialog so the SPOC can adjust rather
+  // than losing what they typed.
+  const handleExplainAndClose = async (disposition: string, comment: string) => {
+    setParkBusy(true); setParkError(null);
+    try {
+      await parkOverpayment(recordId, disposition, comment);
+      setParkModalOpen(false);
+      await fetchDetail();
+    } catch (e: any) {
+      setParkError(formatApiError(e, "Could not close this row."));
+    }
+    setParkBusy(false);
   };
 
   const handleRetry = async () => {
@@ -231,6 +262,7 @@ export default function RowDetailPage() {
       else if (code === "discard") await handleDiscard();
       else if (code === "settlement_override") await handleSettlementOverride();
       else if (code === "edit_gl_rate") setGlRateModalOpen(true);
+      else if (code === "handle_overpayment") { setParkError(null); setParkModalOpen(true); }
       else if (code === "map_invoice") {
         document.getElementById("manual-mapping-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }
@@ -367,6 +399,11 @@ export default function RowDetailPage() {
               fx={detail.fx}
             />
 
+            {/* Only rendered for a row that is, was, or resolved an overpayment
+                — the backend returns null for everything else. Sits directly
+                below "Why this status" because it IS the why for these rows. */}
+            {detail.overpayment && <OverpaymentCard op={detail.overpayment} />}
+
             {showOracleCard && (
               <OracleFusionCard oracle={oracle} creditAmount={credit_amount} hasOraclePayload={hasOraclePayload} fx={detail.fx} />
             )}
@@ -393,6 +430,22 @@ export default function RowDetailPage() {
           error={glRateError}
           onCancel={() => { setGlRateModalOpen(false); setGlRateError(""); }}
           onSubmit={handleEditGlRate}
+        />
+      )}
+
+      {detail.overpayment && (
+        <HandleOverpaymentModal
+          open={parkModalOpen}
+          onClose={() => { setParkModalOpen(false); setParkError(null); }}
+          onApply={handleApplyRoute}
+          onExplain={handleExplainAndClose}
+          receivedTotal={detail.overpayment.received_total}
+          targetTotal={detail.overpayment.target_total}
+          excessAmount={detail.overpayment.excess_amount}
+          currency={detail.overpayment.invoice_currency}
+          options={detail.overpayment.disposition_options}
+          busy={parkBusy}
+          error={parkError}
         />
       )}
     </div>

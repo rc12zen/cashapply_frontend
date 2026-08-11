@@ -56,7 +56,7 @@ import {
   CheckSquare, CheckCircle2, ChevronDown, Download, Eye, FileText,
   Landmark, Layers, Loader2, RefreshCw, Search,
   ShieldCheck, Sparkles, User, X, HelpCircle, Ban,
-  Split, TrendingDown, Trash2,
+  Split, TrendingDown, Trash2, TrendingUp, Archive,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Suspense } from "react";
@@ -128,6 +128,11 @@ interface RunMetrics {
   distributed:         number;
   ready_for_oracle:    number;
   short_payment:       number;
+  // R9e — a SPOC-confirmed capped mapping on an overpaid row: postable, but
+  // deliberately not shown alongside clean exact matches.
+  overpayment:         number;
+  // Overpaid rows whose excess was explained and closed out without posting.
+  overpayment_parked:  number;
   conflict_exception:  number;
   processed:           number;
   rejected:            number;
@@ -189,6 +194,8 @@ type TabKeyNoAll =
   | "distributed"
   | "ready_for_oracle"
   | "short_payment"
+  | "overpayment"
+  | "overpayment_parked"
   | "conflict_exception"
   | "processed"
   | "rejected"
@@ -434,7 +441,11 @@ function AnalysisHistoryPageInner() {
   const selectedEligibleIds = useMemo(
     () => activeRows
       .filter((l) => selectedLines[l.id] && l._source === "matched"
-        && (l.category === "ready_for_oracle" || l.category === "short_payment")
+        // Mirrors hitl/service.py's approve_row() gate — the three groups that
+        // can post. "overpayment" (R9e) is included because it is already a
+        // SPOC-reviewed capped mapping by the time it lands in that bucket.
+        && (l.category === "ready_for_oracle" || l.category === "short_payment"
+            || l.category === "overpayment")
         && l.hitl_status !== "approved" && l.hitl_status !== "rejected")
       .map((l) => l.id),
     [activeRows, selectedLines],
@@ -523,6 +534,8 @@ function AnalysisHistoryPageInner() {
     { key: "distributed",         label: "Distributed",          count: m?.distributed ?? 0 },
     { key: "ready_for_oracle",    label: "Ready for Oracle",     count: m?.ready_for_oracle ?? 0 },
     { key: "short_payment",       label: "Short Payment",        count: m?.short_payment ?? 0 },
+    { key: "overpayment",         label: "Overpayment — Ready to Post", count: m?.overpayment ?? 0 },
+    { key: "overpayment_parked",  label: "Overpayment — Parked",        count: m?.overpayment_parked ?? 0 },
     { key: "conflict_exception",  label: "Conflict / Exception", count: m?.conflict_exception ?? 0 },
     { key: "processed",           label: "Processed",             count: m?.processed ?? 0 },
     { key: "rejected",            label: "Rejected",               count: m?.rejected ?? 0 },
@@ -746,6 +759,8 @@ function AnalysisHistoryPageInner() {
                 { label:"Distributed",         value:m?.distributed        ??0, sub:"Split & Map confirmed — see child receipts",  icon:<CheckCircle2 size={12}/>,                        color:"text-indigo-600"  },
                 { label:"Ready for Oracle",    value:m?.ready_for_oracle   ??0, sub:"Exact match — one click to post",             icon:<Sparkles size={12}/>,                            color:"text-emerald-600" },
                 { label:"Short Payment",       value:m?.short_payment      ??0, sub:"Within tolerance, or manually recorded — one click to post", icon:<TrendingDown size={12}/>,     color:"text-orange-500"  },
+                { label:"Overpayment — Ready to Post",value:m?.overpayment ??0, sub:"Reviewed — one click to post, remainder stays unapplied", icon:<TrendingUp size={12}/>,             color:"text-amber-600"   },
+                { label:"Overpayment — Parked",value:m?.overpayment_parked ??0, sub:"Explained and closed, nothing posted",        icon:<Archive size={12}/>,                             color:"text-slate-500"   },
                 { label:"Conflict / Exception",value:m?.conflict_exception ??0, sub:"Needs SPOC judgment, not just a click",       icon:<AlertTriangle size={12}/>,                       color:"text-red-600"     },
                 { label:"Processed",           value:m?.processed          ??0, sub:"Posted to Oracle Fusion",                      icon:<CheckSquare size={12}/>,                         color:"text-emerald-600" },
                 { label:"Rejected",            value:m?.rejected            ??0, sub:"Rejected by SPOC",                            icon:<X size={12} className="stroke-[2.5]"/>,           color:"text-red-500"     },

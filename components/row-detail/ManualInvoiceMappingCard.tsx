@@ -155,12 +155,33 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
     return () => { cancelled = true; };
   }, [selectedInvoiceNumbers, recordId]);
 
+  // When the selection OVERPAYS, the backend classifies it R9e and refuses to
+  // confirm without a recorded reason for the excess (see hitl/manual_mapping.py).
+  // Collected here, in the same step as the invoice picking, because that is the
+  // moment the SPOC actually knows what the excess is.
+  const isOverpaidSelection = mappingPreview?.rule_id === "R9e";
+  const [overpaymentDisposition, setOverpaymentDisposition] = useState("");
+  const [overpaymentComment, setOverpaymentComment]         = useState("");
+  const overpaymentCommentRequired = overpaymentDisposition === "other";
+  const overpaymentReady =
+    !isOverpaidSelection ||
+    (!!overpaymentDisposition &&
+      (!overpaymentCommentRequired || overpaymentComment.trim().length > 0));
+
   const handleConfirmMapping = async () => {
     if (selectedInvoiceNumbers.size === 0 || !mappingPreview?.qualifies) return;
+    if (!overpaymentReady) return;
     setConfirmMappingLoading(true);
     setConfirmMappingError("");
     try {
-      await confirmManualMapping(recordId, Array.from(selectedInvoiceNumbers));
+      await confirmManualMapping(
+        recordId,
+        Array.from(selectedInvoiceNumbers),
+        isOverpaidSelection ? overpaymentDisposition : undefined,
+        isOverpaidSelection ? overpaymentComment : undefined,
+      );
+      setOverpaymentDisposition("");
+      setOverpaymentComment("");
       setSelectedInvoiceNumbers(new Set());
       setMappingPreview(null);
       setMappingOptions(null);
@@ -351,10 +372,60 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
                           <span>Received: {fmt(mappingPreview.received_total)}</span>
                           <span>Selected total: {fmt(mappingPreview.target_total)}</span>
                           <span>Shortfall: {mappingPreview.shortfall_pct}%</span>
+                          {mappingPreview.excess_amount != null && (
+                            <span className="text-amber-700 font-bold">
+                              Unapplied: {fmt(mappingPreview.excess_amount)}
+                            </span>
+                          )}
                         </div>
                       </>
                     ) : null}
                   </div>
+                </div>
+              )}
+
+              {/* Overpaid selection — each invoice will be applied capped at its
+                  own outstanding and the difference left unapplied on the
+                  receipt, so the reason for the excess is recorded here before
+                  the mapping can be confirmed. */}
+              {isOverpaidSelection && (
+                <div className="px-4 py-3 rounded-xs border border-amber-200 bg-amber-50/50">
+                  <p className="text-[11px] font-black uppercase tracking-wider text-amber-800">
+                    Why will {fmt(mappingPreview?.excess_amount)} stay unapplied?
+                  </p>
+                  <p className="text-[10px] text-amber-700 mt-1 leading-snug">
+                    {fmt(mappingPreview?.target_total)} will post across the selected
+                    invoice(s), each applied at its own outstanding amount.{" "}
+                    {fmt(mappingPreview?.excess_amount)} stays unapplied on the receipt in
+                    Oracle. A reason is required before you can confirm.
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {[
+                      { code: "duplicate_payment", label: "Duplicate payment" },
+                      { code: "cross_ou",          label: "Belongs to another entity" },
+                      { code: "advance_payment",   label: "Paid in advance" },
+                      { code: "other",             label: "Other (comment required)" },
+                    ].map((o) => (
+                      <label key={o.code} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="mapping-overpayment-disposition"
+                          value={o.code}
+                          checked={overpaymentDisposition === o.code}
+                          onChange={() => setOverpaymentDisposition(o.code)}
+                          className="accent-[#222222]"
+                        />
+                        <span className="text-[11px] text-gray-700">{o.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <textarea
+                    value={overpaymentComment}
+                    onChange={(e) => setOverpaymentComment(e.target.value)}
+                    rows={2}
+                    placeholder={overpaymentCommentRequired ? "Required — explain the excess" : "Optional note"}
+                    className="mt-2 w-full text-[11px] border border-amber-200 rounded px-2 py-1.5 bg-white focus:outline-none focus:border-[#222222]"
+                  />
                 </div>
               )}
 
@@ -364,7 +435,7 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
 
               <div className="flex items-center gap-3">
                 <button
-                  disabled={!mappingPreview?.qualifies || confirmMappingLoading}
+                  disabled={!mappingPreview?.qualifies || confirmMappingLoading || !overpaymentReady}
                   onClick={handleConfirmMapping}
                   className="flex items-center gap-2 bg-[#222222] hover:bg-[#222222] disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-4 py-2.5 text-[11px] font-black uppercase tracking-wider rounded-sm cursor-pointer transition-colors"
                 >
@@ -372,8 +443,11 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
                   Confirm Mapping
                 </button>
                 <p className="text-[10px] text-gray-400 leading-snug">
-                  Moves this row to <span className="font-bold text-gray-500">Ready for Oracle</span> — does not post.
-                  Use Approve &amp; Post afterward.
+                  Moves this row to{" "}
+                  <span className="font-bold text-gray-500">
+                    {isOverpaidSelection ? "Overpayment — Ready to Post" : "Ready for Oracle"}
+                  </span>{" "}
+                  — does not post. Use Approve &amp; Post afterward.
                 </p>
               </div>
             </>

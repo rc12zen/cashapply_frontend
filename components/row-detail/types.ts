@@ -54,6 +54,38 @@ export interface FxView {
   fx_credit_to_invoice_source: string | null;    // "gl_rates_table" | "static_map" | "spoc_manual"
 }
 
+/**
+ * Everything the screen needs to explain an overpayment — see the backend's
+ * bff/row_detail.py `_build_overpayment()`. Present at three points in the
+ * lifecycle and null for any row unrelated to one:
+ *   is_open_overpayment — R11, awaiting a decision
+ *   is_parked           — closed out with a recorded disposition, nothing posted
+ *   is_capped           — R9e, mapped with each invoice capped at its outstanding
+ */
+export interface OverpaymentView {
+  is_open_overpayment: boolean;
+  is_parked:           boolean;
+  is_capped:           boolean;
+  target_total:        number;
+  received_total:      number;
+  excess_amount:       number;
+  invoice_currency:    string | null;
+  // Computed cause + supporting detail (rule_engine/overpayment_reason.py).
+  // Advisory only — never a decision, always a suggestion for the SPOC.
+  reason:              string | null;
+  evidence:            Record<string, any> | null;
+  disposition:         string | null;
+  disposition_label:   string | null;
+  disposition_at:      string | null;
+  disposition_by:      string | null;
+  // Only set once a capped mapping has actually posted.
+  unapplied_amount:    number | null;
+  disposition_options: { code: string; label: string }[];
+  // Read-time check, parked "awaiting remittance" rows only — no background
+  // job runs, so this is only ever computed while someone is looking.
+  remittance_now_available?: boolean;
+}
+
 export interface ConfirmedInvoice {
   invoice_number:     string;
   customer_name:      string | null;
@@ -179,6 +211,8 @@ export interface RowDetail {
   // Currency-aware view of the credited amount — see FxView. Optional so
   // older backend builds (before the "fx" block) still typecheck.
   fx?: FxView;
+  // Null unless this row is, was, or resolved an overpayment — see OverpaymentView.
+  overpayment?:       OverpaymentView | null;
   pipeline:           any[];
   oracle: {
     payload:             Record<string, any>;
@@ -250,6 +284,12 @@ export interface MappingPreviewResponse {
   target_total:    number;
   received_total:  number;
   shortfall_pct:   number;
+  // Only present when the selection OVERPAYS (rule_id R9e). The mapping is
+  // still allowed — each invoice is applied capped at its own outstanding —
+  // but the backend refuses to confirm without a recorded reason for this
+  // amount. See hitl/manual_mapping.py's _classify().
+  excess_amount?:       number;
+  requires_disposition?: boolean;
 }
 
 // ── Reason-code → plain English ───────────────────────────────────────────────
@@ -258,7 +298,9 @@ export const REASON_SENTENCES: Record<string, { text: string; tone: "ok" | "warn
   EXACT_MATCH:              { tone: "ok",    text: "Payment exactly covers the invoice outstanding. Ready to post." },
   ACCEPTABLE_SHORT_PAYMENT: { tone: "ok",    text: "Payment is slightly below the invoice outstanding, but within the accepted short-payment tolerance. Posting is allowed." },
   UNEXPLAINED_SHORTAGE:     { tone: "warn",  text: "Payment falls short of the invoice outstanding beyond the accepted tolerance. SPOC review is required." },
-  OVERPAYMENT_UNEXPLAINED:  { tone: "warn",  text: "Payment exceeds the invoice outstanding. All overpayments require SPOC review before posting." },
+  OVERPAYMENT_UNEXPLAINED:  { tone: "warn",  text: "Payment exceeds the invoice outstanding. All overpayments require SPOC review before posting — either map the invoices it actually covers, or record why the excess exists." },
+  OVERPAYMENT_CAPPED:       { tone: "ok",    text: "A SPOC selected these invoices and each will be applied capped at its own outstanding. The excess stays unapplied on the receipt. Ready to post." },
+  NO_PAYABLE_BALANCE:       { tone: "error", text: "The matched documents carry no outstanding balance to apply this payment against. Re-map this row to the invoice(s) the payment actually covers." },
   CUSTOMER_ONLY_NO_REMIT:   { tone: "info",  text: "Customer was identified but no invoice number was found. Waiting for the customer to send a remittance advice." },
   NO_SIGNAL:                { tone: "error", text: "Nothing could be extracted — no customer name or invoice number was found in the payment narrative." },
   CUSTOMER_CONFLICT:        { tone: "error", text: "The customer on the remittance does not match who the aging report shows as the invoice owner." },

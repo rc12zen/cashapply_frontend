@@ -409,6 +409,14 @@ export const rejectEntry        = (id: number, comment?: string) => API.post(`/a
 // Backend blocks (400/409) with a clear message if the row isn't rejected,
 // was changed concurrently, or its invoice can no longer be safely re-claimed.
 export const reopenEntry        = (id: number, comment?: string) => API.post(`/api/hitl/reopen/${id}`, { comment });
+// Route B for an overpaid row — record WHY the excess exists and close the row
+// out without posting anything (see hitl/overpayment.py). Nothing is sent to
+// Oracle; the bare receipt keeps holding the cash unapplied. Reversible via
+// reopenEntry above, which handles parked rows as well as rejected ones.
+// disposition is one of: awaiting_remittance | duplicate_payment | cross_ou |
+// advance_payment | other  ("other" requires a comment).
+export const parkOverpayment    = (id: number, disposition: string, comment?: string) =>
+  API.post(`/api/hitl/park-overpayment/${id}`, { disposition, comment });
 // Unidentified rows only — see hitl/service.py's mark_eligible_for_receipt()
 // / discard_row(). markEligible creates the bare Oracle receipt now (held
 // back automatically by Step 4.5 for unidentified rows); discardEntry moves
@@ -485,7 +493,21 @@ export const getCustomerNameOptions = (id: number) =>
 export const getMappingOptions       = (id: number)                              => API.get(`/api/hitl/${id}/mapping-options`);
 export const getInvoicesForCustomer  = (id: number, customerName: string)         => API.get(`/api/hitl/${id}/mapping-options/customer`, { params: { customer_name: customerName } });
 export const previewManualMapping    = (id: number, invoiceNumbers: string[])     => API.post(`/api/hitl/${id}/mapping-preview`, { invoice_numbers: invoiceNumbers });
-export const confirmManualMapping    = (id: number, invoiceNumbers: string[])     => API.post(`/api/hitl/${id}/mapping-confirm`, { invoice_numbers: invoiceNumbers });
+// overpaymentDisposition/Comment are only read when the selection OVERPAYS
+// (rule R9e — see hitl/manual_mapping.py's _classify). In that case each
+// invoice is applied capped at its own outstanding and the excess is left
+// unapplied on the receipt, so the backend REFUSES to confirm without a
+// recorded reason for the excess. Ignored entirely for a normal mapping.
+export const confirmManualMapping    = (
+  id: number,
+  invoiceNumbers: string[],
+  overpaymentDisposition?: string,
+  overpaymentComment?: string,
+) => API.post(`/api/hitl/${id}/mapping-confirm`, {
+  invoice_numbers: invoiceNumbers,
+  overpayment_disposition: overpaymentDisposition,
+  overpayment_comment: overpaymentComment,
+});
 
 /**
  * Approve a record.
