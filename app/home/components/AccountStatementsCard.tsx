@@ -10,7 +10,7 @@ export interface DetectionInfo {
 }
 
 interface AccountStatementsCardProps {
-  statementInputRef: RefObject<HTMLInputElement>;
+  statementInputRef: RefObject<HTMLInputElement | null>;
   onStatementUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   statementUploading: boolean;
   /** AI (Layer 2B narrative extraction) confirmed reachable. When false,

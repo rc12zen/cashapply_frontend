@@ -5,6 +5,8 @@
  * state needed — <details>/<summary> handles the expand/collapse natively.
  */
 
+
+
 interface FaqItem {
   q: string;
   a: string;
