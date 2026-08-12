@@ -51,12 +51,14 @@ export interface CreditRuleConfig {
   pattern?: string;
 }
 
+// "field_matches" (a user-typed regex applied to every row) was removed —
+// it was a ReDoS sink on the backend, and the three remaining types cover
+// the documented use case of skipping Opening/Closing Balance rows.
 export interface ExclusionRule {
-  type: "field_value_in" | "field_not_equals" | "field_blank" | "field_matches";
+  type: "field_value_in" | "field_not_equals" | "field_blank";
   field: string;
   values?: string[];
   value?: string;
-  pattern?: string;
 }
 
 export interface BuilderTestRow {
@@ -116,8 +118,8 @@ export interface AccountLocator {
   col?: number;
   // column
   name?: string;
-  // regex
-  pattern?: string;
+  // regex — no `pattern` field: the backend uses a fixed server-side
+  // account matcher and ignores any pattern sent by the client (ReDoS fix).
   in?: { type: "cell" | "column" | "sheet"; row?: number; col?: number; name?: string };
 }
 
