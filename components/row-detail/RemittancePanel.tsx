@@ -10,6 +10,7 @@
 import { ChevronLeft, Download, Loader2, Mail } from "lucide-react";
 import { useState } from "react";
 import { downloadStorageFile } from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 import { RowDetail, fmt, fmtDate } from "./types";
 import { DataRow } from "./SharedCardPieces";
 export function RemittancePanel({ remittance, allInvoiceNumbers, remittanceStatus, collapsed, onToggle }: {
@@ -28,13 +29,13 @@ export function RemittancePanel({ remittance, allInvoiceNumbers, remittanceStatu
     setDownloading(true);
     try {
       const res = await downloadStorageFile(remittance.download_url);
-      const blob = new Blob([res.data]);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = remittance.filename || "remittance-email";
-      a.click();
-      URL.revokeObjectURL(url);
+      // `remittance.filename` originates in an ingested remittance e-mail —
+      // the most externally-influenced string in the app — so it is
+      // sanitised before becoming a `download` attribute (extension /
+      // bidi-override spoofing). downloadBlob() also defers the revoke,
+      // which this call site got wrong: revoking immediately races the
+      // browser's async blob read and truncates larger attachments.
+      downloadBlob(new Blob([res.data]), remittance.filename, "remittance-email");
     } catch {
       // Best-effort — the panel doesn't have its own error banner, so this
       // fails silently rather than crashing the row-detail page. Retriable

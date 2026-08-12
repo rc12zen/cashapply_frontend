@@ -118,6 +118,7 @@ function fmtDate(s: string | null) {
 
 const PAGE_SIZE = 50;
 
+import { downloadBlob } from "@/lib/download";
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
 
@@ -282,14 +283,10 @@ export default function ExecutiveSummaryPage() {
     setError("");
     try {
       const res = await exportExecutiveCsv(filterParams());
-      const url = window.URL.createObjectURL(new Blob([res.data], { type: "text/csv" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "executive_summary_posted_records.csv";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(
+        new Blob([res.data], { type: "text/csv" }),
+        "executive_summary_posted_records.csv",
+      );
     } catch {
       setError("Could not export CSV.");
     } finally {

@@ -20,6 +20,7 @@
  * here or on the frontend.
  */
 import { API } from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 
 export interface AiUsageByModel {
   model: string;
@@ -114,12 +115,5 @@ export const downloadAiUsageCsv = async (
       ...(user ? { user } : {}),
     },
   });
-  const url = window.URL.createObjectURL(new Blob([res.data], { type: "text/csv" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "ai-usage.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.URL.revokeObjectURL(url);
+  downloadBlob(new Blob([res.data], { type: "text/csv" }), "ai-usage.csv");
 };

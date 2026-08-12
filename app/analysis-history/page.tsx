@@ -70,6 +70,7 @@ import {
 } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { usePageGuard } from "@/lib/usePageGuard";
+import { downloadText, toCsv } from "@/lib/download";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import PageAccessDenied from "@/components/PageAccessDenied";
 import RetryAllFailedReceiptsBanner from "@/components/RetryAllFailedReceiptsBanner";
@@ -513,10 +514,14 @@ function AnalysisHistoryPageInner() {
 
   const exportDetailCSV = () => {
     if (!activeRows.length) return;
-    const h = Object.keys(activeRows[0]).join(",");
-    const r = activeRows.map((l) => Object.values(l).map((v) => `"${v??""}`).join(",")).join("\n");
-    const blob = new Blob([h+"\n"+r], {type:"text/csv"});
-    const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`run_${viewingRun?.run_id}_${activeTab}.csv`; a.click();
+    // Was hand-rolled as `"${v??""}` — an unterminated quote, so any export
+    // was structurally broken CSV. toCsv() also escapes embedded quotes and
+    // neutralises formula-triggering values (CWE-1236).
+    const cols = Object.keys(activeRows[0]);
+    downloadText(
+      toCsv(activeRows as unknown as Record<string, unknown>[], cols),
+      `run_${viewingRun?.run_id}_${activeTab}.csv`,
+    );
   };
 
   const formatDate = (iso: string) => { try { return new Date(iso).toLocaleString(); } catch { return iso; } };
