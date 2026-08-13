@@ -7,6 +7,8 @@
  * on data-fetching/orchestration.
  */
 import { Landmark, Pencil } from "lucide-react";
+import RevealableAccountNumber from "@/components/common/RevealableAccountNumber";
+import { revealBankAccountNumber } from "@/lib/accountReveal";
 
 export interface BusinessUnitInfo {
   ou_number: string;
@@ -58,7 +60,11 @@ export default function BankAccountsTable({
                   <div>
                     <div className="font-bold text-primary">{a.display_name || a.bank_name}</div>
                     <div className="font-mono text-[10px] text-gray-400">
-                      {a.bank_name} &middot; {a.account_last4 ? `••••${a.account_last4}` : a.account_number}
+                      {a.bank_name} &middot;{" "}
+                      <RevealableAccountNumber
+                        masked={a.account_number}
+                        fetchFull={() => revealBankAccountNumber(a.id)}
+                      />
                     </div>
                   </div>
                 </div>

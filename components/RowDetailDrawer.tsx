@@ -26,6 +26,8 @@ import {
 import { useEffect, useState } from "react";
 import { approveEntry, rejectEntry, getRowDetail } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
+import RevealableAccountNumber from "@/components/common/RevealableAccountNumber";
+import { revealLineItemAccountNumber } from "@/lib/accountReveal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -314,7 +316,15 @@ export default function RowDetailDrawer({ recordId, onClose, onApprove, onReject
 								<div className="bg-gray-50 border border-gray-200 rounded-sm px-4 py-1">
 									<InfoRow label="Bank"           value={detail.bank_info.bank_name} />
 									<InfoRow label="Date"           value={detail.bank_info.statement_date} mono />
-									<InfoRow label="Account"        value={detail.bank_info.bank_account_number} mono />
+									<InfoRow
+									label="Account"
+									value={
+										<RevealableAccountNumber
+											masked={detail.bank_info.bank_account_number}
+											fetchFull={() => revealLineItemAccountNumber(detail.id)}
+										/>
+									}
+								/>
 									<InfoRow label="Credit Amount"  value={`${Number(detail.bank_info.credit_amount).toLocaleString(undefined,{minimumFractionDigits:2})} ${detail.bank_info.currency}`} mono />
 									<InfoRow label="Narrative"      value={detail.bank_info.narrative} />
 								</div>

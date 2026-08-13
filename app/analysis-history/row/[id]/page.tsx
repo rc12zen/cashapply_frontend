@@ -361,7 +361,7 @@ export default function RowDetailPage() {
 
             <SpecialFlagsBanner flags={specialFlags} />
 
-            <PaymentReceivedCard bs={bs} />
+            <PaymentReceivedCard recordId={recordId} bs={bs} />
 
             <IdentifiedCard recordId={recordId} detail={detail} onCorrected={fetchDetail} />
 
