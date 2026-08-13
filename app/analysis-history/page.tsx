@@ -58,7 +58,7 @@ import {
   ShieldCheck, Sparkles, User, X, HelpCircle, Ban,
   Split, TrendingDown, Trash2, TrendingUp, Archive,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import StatusBadge from "@/components/StatusBadge";
@@ -907,8 +907,8 @@ function AnalysisHistoryPageInner() {
                       const canOpenRow = !!line.id;
 
                       return (
-                        <>
-                        <tr key={line.id}
+                        <Fragment key={line.id}>
+                        <tr
                           onClick={() => canOpenRow && router.push(`/analysis-history/row/${line.id}?run_id=${viewingRun.run_id}`)}
                           className={`transition-colors group ${canOpenRow ? "cursor-pointer hover:bg-blue-50/40" : "hover:bg-gray-50/80"} ${selectedLines[line.id]?"bg-blue-50/20":""}`}>
                           <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
@@ -968,7 +968,7 @@ function AnalysisHistoryPageInner() {
                             </td>
                           </tr>
                         )}
-                        </>
+                        </Fragment>
                       );
                     })}
                   </tbody>
