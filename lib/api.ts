@@ -409,6 +409,32 @@ export const rejectEntry        = (id: number, comment?: string) => API.post(`/a
 // Backend blocks (400/409) with a clear message if the row isn't rejected,
 // was changed concurrently, or its invoice can no longer be safely re-claimed.
 export const reopenEntry        = (id: number, comment?: string) => API.post(`/api/hitl/reopen/${id}`, { comment });
+
+// ── Reopen WITH edits (the Reopen & Review modal) ────────────────────────────
+// The path a SPOC actually takes: reopening a rejected row (or a parked
+// overpayment) lets them correct the customer and/or the invoice mapping, and
+// the row's bucket is recomputed from those edits — reopenEntry above is the
+// older pure undo, which always returned the row to the bucket it was rejected
+// from with the same mapping. See hitl/reopen_with_edits.py.
+export const getReopenOptions   = (id: number) => API.get(`/api/hitl/${id}/reopen-options`);
+export const getReopenInvoices  = (id: number, customerName: string) =>
+  API.get(`/api/hitl/${id}/reopen-invoices`, { params: { customer_name: customerName } });
+// Read-only: what confirmReopen WOULD do. Returns from/to snapshots, blockers,
+// and bucket_pinned_by (set when reference_status pins the bucket, so
+// re-evaluation cannot move it however the rule changes).
+export const previewReopen      = (
+  id: number,
+  body: { customer_name?: string; invoice_numbers?: string[]; overpayment_disposition?: string },
+) => API.post(`/api/hitl/${id}/reopen-preview`, body);
+// Never posts to Oracle — a row landing in Ready for Oracle still needs an
+// explicit Approve & Post.
+export const confirmReopen      = (
+  id: number,
+  body: {
+    customer_name?: string; invoice_numbers?: string[]; comment?: string;
+    expected_version?: number; overpayment_disposition?: string; overpayment_comment?: string;
+  },
+) => API.post(`/api/hitl/${id}/reopen-confirm`, body);
 // Route B for an overpaid row — record WHY the excess exists and close the row
 // out without posting anything (see hitl/overpayment.py). Nothing is sent to
 // Oracle; the bare receipt keeps holding the cash unapplied. Reversible via
