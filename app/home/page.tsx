@@ -606,16 +606,33 @@ export default function Dashboard() {
   // takes whole files), so this is one checkbox over all of them.
   const isStatementSelected = (s: StatementGroup) =>
     s.accountKeys.length === 0 ? true : s.accountKeys.every(isAccountSelected);
+  // Only one statement may be analysable at a time — checking one deselects
+  // every other statement first, so this behaves like a radio group even
+  // though each row still renders as a checkbox.
   const toggleStatementSelected = (s: StatementGroup) => {
     if (s.accountKeys.length === 0) return;
     const turningOff = isStatementSelected(s);
     setDeselectedAccountKeys((prev) => {
       const next = new Set(prev);
-      if (turningOff) s.accountKeys.forEach((k) => next.add(k));
-      else s.accountKeys.forEach((k) => next.delete(k));
+      if (turningOff) {
+        s.accountKeys.forEach((k) => next.add(k));
+      } else {
+        for (const other of statementGroups) {
+          if (other.filename !== s.filename) other.accountKeys.forEach((k) => next.add(k));
+        }
+        s.accountKeys.forEach((k) => next.delete(k));
+      }
       return next;
     });
   };
+  // Only one statement may ever sit in the list at a time — analysed,
+  // pending configuration, mid-processing, or anything else. A new upload
+  // is blocked as long as ANY file is listed; the user must remove it
+  // (the X button, which archives it — the file itself is kept in
+  // storage) before uploading another. Deliberately not scoped to
+  // "unconsumed"/"runnable" statements only — an already-analysed file
+  // left in the list must block a new upload just as much as a pending one.
+  const hasQueuedStatement = statementGroups.length > 0;
 
 
   const filesAlreadyAnalyzed =
@@ -762,8 +779,16 @@ export default function Dashboard() {
   const handleStatementUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     // Reset the input so re-picking the same file later still fires onChange
-    // (matters when this upload is aborted by the AI gate below).
+    // (matters when this upload is aborted by the AI gate below, or by the
+    // queued-statement check just below it).
     e.target.value = "";
+    // Only one statement may sit in the list at a time — checked here too
+    // (not just via the disabled Upload button) in case this fires from a
+    // stale render.
+    if (hasQueuedStatement) {
+      setError("A statement is already in the list. Remove it before uploading another.");
+      return;
+    }
     setStatementUploading(true); setError(""); setDuplicateUploadInfo(null); setConfigNeededNotice(""); setUploadNotice("");
     // AI gate — re-verify at the moment of the click (not just the cached
     // on-load status), so a provider that dropped since page load can't let a
@@ -956,6 +981,7 @@ export default function Dashboard() {
 						statementUploading={statementUploading}
 						aiReady={aiReady}
 						aiReason={aiReason}
+						hasQueuedStatement={hasQueuedStatement}
 						statementGroups={statementGroups}
 						isStatementSelected={isStatementSelected}
 						toggleStatementSelected={toggleStatementSelected}
