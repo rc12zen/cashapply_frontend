@@ -331,13 +331,18 @@ export default function Dashboard() {
             setLastRunId(latest.run_id ?? null);
           }
         } catch {}
+        // Rows just got consumed by this run — refresh the file/account
+        // lists so the statement card's pending counts and the Start
+        // button gate update without waiting for a tab refocus/reload.
+        fetchFiles();
+        fetchPendingByAccount();
       }
       if (newStatus === "error" && prevRunStatus.current !== "error") {
         setError(res.data.message || "Analysis run failed.");
       }
       prevRunStatus.current = newStatus;
     } catch {}
-  }, []);
+  }, [fetchFiles, fetchPendingByAccount]);
 
   const fetchAgingHistory = useCallback(async () => {
     try {
@@ -877,6 +882,9 @@ export default function Dashboard() {
       await deleteFile(filename);
       await fetchFiles();
       await fetchPendingByAccount();
+      // The completion banner celebrates a specific set of files — once one
+      // of them is removed, that result no longer describes what's left.
+      if (lastRunFiles.includes(filename)) setRunCompletionSummary(null);
       showSuccess(`"${filename}" removed from the next run.`);
     } catch (e: any) {
       setError(
