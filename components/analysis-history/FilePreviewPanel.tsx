@@ -30,6 +30,7 @@
 import { Download, FileText, Layers, Loader2, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { downloadAgingReport, getAgingPreview, getFilePreview } from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 
 type PreviewSource = "statement" | "aging_run" | "aging_active";
 
@@ -175,18 +176,17 @@ export default function FilePreviewPanel({
 
   const makeDownloadHandler = (sourceFileId: number | undefined, preview: any) => async () => {
     const res = await downloadAgingReport(sourceFileId);
-    const url = URL.createObjectURL(res.data);
-    const a = document.createElement("a");
     // PATCH: the backend now streams the real .xlsx/.xls/.csv directly
     // instead of wrapping it in a zip (a zip-of-a-zip opened straight into
     // Excel/OneDrive was throwing "file format may not be matching with
     // the file extension" — see config_routes.py's aging_download()).
     // Save with the file's own name/extension, not a forced ".zip".
-    a.href = url; a.download = preview?.filename || "aging_report";
-    a.click();
-    // Revoking immediately races the browser's async blob read on large files
-    // and truncates the download — defer it instead.
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    //
+    // downloadBlob() sanitises that server-supplied name before it becomes a
+    // `download` attribute, and keeps the deferred revokeObjectURL() this
+    // call site needed (revoking immediately races the browser's async blob
+    // read on large files and truncates the download).
+    downloadBlob(res.data, preview?.filename, "aging_report");
   };
 
   const onDownload =

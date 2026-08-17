@@ -107,12 +107,6 @@ function fieldSampleValues(
   return [];   // concat / none — no single representative sample to judge
 }
 
-// Strong, general account-number matcher for the regex locator. Captures any
-// 6–34 char alphanumeric run that contains at least one digit — covers pure
-// numeric accounts (000205024781) and alphanumeric/IBAN-style ones (GB29NWBK…),
-// while ignoring plain words. The user picks the real one from the found list.
-const AUTO_ACCOUNT_REGEX = "((?=[A-Za-z0-9]*\\d)[A-Za-z0-9]{6,34})";
-
 // Formats every new bank config is tested/parsed against, tried in order
 // (first match wins — see backend parser.py _parse_date / _FORMAT_MAP).
 // Month-name forms are unambiguous (they never match a numeric date) so they
@@ -2362,7 +2356,6 @@ function StepExclusions({
     { value: "field_value_in",   label: "Field value is one of…"   },
     { value: "field_not_equals", label: "Field does not equal…"    },
     { value: "field_blank",      label: "Field is blank"           },
-    { value: "field_matches",    label: "Field matches regex"      },
   ];
 
   return (
@@ -2431,15 +2424,6 @@ function StepExclusions({
                 placeholder="Expected value"
                 value={rule.value ?? ""}
                 onChange={(e) => updateRule(i, { value: e.target.value })}
-                className="text-xs font-mono border border-gray-300 rounded-sm px-2 py-1.5 focus:outline-none"
-              />
-            )}
-            {rule.type === "field_matches" && (
-              <input
-                type="text"
-                placeholder="Regex pattern"
-                value={rule.pattern ?? ""}
-                onChange={(e) => updateRule(i, { pattern: e.target.value })}
                 className="text-xs font-mono border border-gray-300 rounded-sm px-2 py-1.5 focus:outline-none"
               />
             )}
@@ -2702,11 +2686,10 @@ function StepLocateAccount({
                 key={o.v}
                 type="button"
                 onClick={() => {
-                  const pat = accountLocator.pattern ?? AUTO_ACCOUNT_REGEX;
                   if (o.v === "cell") setAccountLocator({ type: "cell", row: 0, col: 1 });
                   else if (o.v === "column") setAccountLocator({ type: "column", name: columns[0] ?? "" });
-                  else if (o.v === "regex_col") setAccountLocator({ type: "regex", in: { type: "column", name: columns[0] ?? "" }, pattern: pat });
-                  else setAccountLocator({ type: "regex", in: { type: "cell", row: 0, col: 1 }, pattern: pat });
+                  else if (o.v === "regex_col") setAccountLocator({ type: "regex", in: { type: "column", name: columns[0] ?? "" } });
+                  else setAccountLocator({ type: "regex", in: { type: "cell", row: 0, col: 1 } });
                 }}
                 className={`text-[11px] font-bold px-3 py-1.5 rounded-sm border cursor-pointer ${
                   mode === o.v ? "bg-[#222222] text-white border-[#222222]" : "bg-white text-gray-600 border-gray-300 hover:border-[#222222]"
@@ -2806,35 +2789,22 @@ function StepLocateAccount({
               </>
             )}
 
-            {/* regex explainer — shown for both regex modes since detection is automatic */}
+            {/* regex explainer — detection is automatic and fixed server-side.
+                The "Advanced: edit pattern" override was removed: a
+                caller-supplied pattern reached re.compile() on the backend,
+                a ReDoS sink. The server now always uses its own constant. */}
             {isRegex && (
-              <div className="space-y-2">
-                <div className="flex items-start gap-2 text-[10px] text-gray-500 bg-white border border-gray-200 rounded p-2">
-                  <Info size={12} className="shrink-0 mt-0.5 text-[#222222]" />
-                  <span>
-                    We automatically detect account-number-like values inside the{" "}
-                    {mode === "regex_cell" ? "cell" : "column"} —
-                    numeric (e.g. <span className="font-mono">000205024781</span>) and
-                    alphanumeric / IBAN-style (e.g. <span className="font-mono">GB29NWBK…</span>),
-                    even when buried in text like “… (INR) - 000205024781”. Pick the{" "}
-                    {mode === "regex_cell" ? "cell" : "column"}, click <strong>Find account</strong>,
-                    then choose the right one below.
-                  </span>
-                </div>
-                {/* Advanced: override the auto pattern for a tricky source. */}
-                <details className="text-[10px] text-gray-500">
-                  <summary className="cursor-pointer font-bold uppercase tracking-wider text-gray-400 hover:text-[#222222]">
-                    Advanced: edit pattern
-                  </summary>
-                  <input
-                    type="text"
-                    value={accountLocator.pattern ?? AUTO_ACCOUNT_REGEX}
-                    onChange={(e) => setAccountLocator({ ...accountLocator, pattern: e.target.value })}
-                    placeholder={AUTO_ACCOUNT_REGEX}
-                    className="mt-1 w-full border border-gray-300 rounded-sm px-2 py-1 font-mono text-[10px] focus:outline-none focus:border-[#222222]"
-                  />
-                  <span className="block mt-1 italic">Regex; the last capture group (or the whole match) is used as the account.</span>
-                </details>
+              <div className="flex items-start gap-2 text-[10px] text-gray-500 bg-white border border-gray-200 rounded p-2">
+                <Info size={12} className="shrink-0 mt-0.5 text-[#222222]" />
+                <span>
+                  We automatically detect account-number-like values inside the{" "}
+                  {mode === "regex_cell" ? "cell" : "column"} —
+                  numeric (e.g. <span className="font-mono">000205024781</span>) and
+                  alphanumeric / IBAN-style (e.g. <span className="font-mono">GB29NWBK…</span>),
+                  even when buried in text like “… (INR) - 000205024781”. Pick the{" "}
+                  {mode === "regex_cell" ? "cell" : "column"}, click <strong>Find account</strong>,
+                  then choose the right one below.
+                </span>
               </div>
             )}
 
@@ -2991,11 +2961,10 @@ function StepLocateAccount({
             headerRow={hRow}
             isCellClickable={(ri, ci, isHeader) => viewMode === "preview" && (mode === "cell" || mode === "regex_cell" ? true : isHeader)}
             onCellClick={(ri, ci, isHeader) => {
-              const pat = accountLocator.pattern ?? AUTO_ACCOUNT_REGEX;
               if (mode === "cell") setAccountLocator({ type: "cell", row: ri, col: ci });
-              else if (mode === "regex_cell") setAccountLocator({ type: "regex", in: { type: "cell", row: ri, col: ci }, pattern: pat });
+              else if (mode === "regex_cell") setAccountLocator({ type: "regex", in: { type: "cell", row: ri, col: ci } });
               else if (isHeader && mode === "column") setAccountLocator({ type: "column", name: columns[ci] });
-              else if (isHeader && mode === "regex_col") setAccountLocator({ type: "regex", in: { type: "column", name: columns[ci] }, pattern: pat });
+              else if (isHeader && mode === "regex_col") setAccountLocator({ type: "regex", in: { type: "column", name: columns[ci] } });
             }}
             cellHighlight={(ri, ci, isHeader) => {
               if (mode === "cell") return accountLocator.row === ri && accountLocator.col === ci;

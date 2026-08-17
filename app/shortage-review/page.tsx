@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getProcessedShortages, getFilterOptions } from "@/lib/api";
+import { downloadText, toCsv } from "@/lib/download";
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
 
@@ -314,14 +315,13 @@ function ShortageReviewPageInner() {
     if (!activeRows.length) return;
     const cols = ["id","bank_name","statement_date","customer_name","primary_invoice",
                   "credit_amount","sum_outstanding","variance","ratio_pct","oracle_ref_no","oracle_posted_at"];
-    const h = cols.join(",");
-    const r = activeRows.map(row =>
-      cols.map(c => `"${(row as any)[c] ?? ""}"`).join(",")
-    ).join("\n");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([h + "\n" + r], { type: "text/csv" }));
-    a.download = `shortage_review_${activeTab}.csv`;
-    a.click();
+    // toCsv() escapes embedded quotes (RFC 4180) and neutralises values that
+    // would otherwise be evaluated as spreadsheet formulas — a customer name
+    // carried through from a statement can start with "=" (CWE-1236).
+    downloadText(
+      toCsv(activeRows as unknown as Record<string, unknown>[], cols),
+      `shortage_review_${activeTab}.csv`,
+    );
   };
 
   const backHref = runId ? `/analysis-history?run_id=${runId}` : "/analysis-history";

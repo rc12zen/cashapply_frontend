@@ -31,6 +31,8 @@ import {
   Trash2,
   Edit3,
   ArrowRightLeft,
+  Archive,
+  Scale,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -52,6 +54,10 @@ const ICON_MAP: Record<string, LucideIcon> = {
   "trash-2": Trash2,
   "edit-3": Edit3,
   "arrow-right-left": ArrowRightLeft,
+  "archive": Archive,
+  // The single entry point on an overpaid row — a balance, because the decision
+  // is about which side the money falls on.
+  "scale": Scale,
 };
 
 export default function ActionBar({

@@ -17,6 +17,8 @@ import { AlertTriangle, Info, Loader2, X } from "lucide-react";
 import { useState } from "react";
 import { AdditionalBusinessUnitsPicker, type BusinessUnitOption } from "./BusinessUnitPicker";
 import type { BankAccountRow } from "./BankAccountsTable";
+import RevealableAccountNumber from "@/components/common/RevealableAccountNumber";
+import { revealBankAccountNumber } from "@/lib/accountReveal";
 
 export default function EditBusinessUnitsModal({
   account,
@@ -58,7 +60,8 @@ export default function EditBusinessUnitsModal({
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           <div className="text-[11px] text-gray-500 font-medium">
-            <span className="font-bold text-primary">{account.bank_name}</span> &middot; {account.account_number}
+            <span className="font-bold text-primary">{account.bank_name}</span> &middot;{" "}
+            <RevealableAccountNumber masked={account.account_number} fetchFull={() => revealBankAccountNumber(account.id)} />
           </div>
 
           <div className="bg-blue-50 border-l-2 border-blue-400 p-3 text-[11px] flex items-start gap-2 rounded-r-sm">
