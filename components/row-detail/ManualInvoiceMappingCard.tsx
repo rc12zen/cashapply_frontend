@@ -26,8 +26,10 @@ import {
 } from "@/lib/api";
 import { CardShell, CardHead } from "@/components/row-detail/SharedCardPieces";
 import SearchableSelect from "@/components/row-detail/SearchableSelect";
+import CustomerCreditsPanel from "@/components/row-detail/CustomerCreditsPanel";
 import {
   RowDetail, MappingInvoiceOption, MappingOptionsResponse, MappingPreviewResponse,
+  MappingCreditOption, MappingCreditContext,
   fmt, fmtDate, formatApiError,
 } from "@/components/row-detail/types";
 
@@ -82,6 +84,13 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
   const [mappingOptionsError, setMappingOptionsError]   = useState("");
   const [selectedCustomerForMapping, setSelectedCustomerForMapping] = useState("");
   const [customerInvoiceOptions, setCustomerInvoiceOptions]         = useState<MappingInvoiceOption[]>([]);
+  // The negative half of the aging report for whichever customer is
+  // currently in play. Held separately from mappingOptions because it also
+  // has to refresh on the step-2 path, where the SPOC picks a customer by
+  // hand and a second request returns that customer's rows.
+  const [creditMemos, setCreditMemos]           = useState<MappingCreditOption[]>([]);
+  const [unappliedReceipts, setUnappliedReceipts] = useState<MappingCreditOption[]>([]);
+  const [creditContext, setCreditContext]       = useState<MappingCreditContext | undefined>(undefined);
   const [selectedInvoiceNumbers, setSelectedInvoiceNumbers]         = useState<Set<string>>(new Set());
   const [mappingPreview, setMappingPreview]             = useState<MappingPreviewResponse | null>(null);
   const [mappingPreviewError, setMappingPreviewError]   = useState("");
@@ -108,6 +117,9 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
       const res = await getMappingOptions(recordId);
       setMappingOptions(res.data);
       setCustomerInvoiceOptions(res.data.customer_identified ? (res.data.invoices || []) : []);
+      setCreditMemos(res.data.credit_memos || []);
+      setUnappliedReceipts(res.data.unapplied_receipts || []);
+      setCreditContext(res.data.credit_context);
     } catch (e: any) {
       setMappingOptionsError(formatApiError(e, "Could not load invoice mapping options."));
     }
@@ -125,10 +137,20 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
     setSelectedInvoiceNumbers(new Set());
     setMappingPreview(null);
     setMappingOptionsError("");
-    if (!customerName) { setCustomerInvoiceOptions([]); return; }
+    if (!customerName) {
+      setCustomerInvoiceOptions([]);
+      // Clear the credits too — they were scoped to the previous customer,
+      // and leaving them up would attribute one customer's credit memos to
+      // whoever is picked next.
+      setCreditMemos([]); setUnappliedReceipts([]); setCreditContext(undefined);
+      return;
+    }
     try {
       const res = await getInvoicesForCustomer(recordId, customerName);
       setCustomerInvoiceOptions(res.data.invoices || []);
+      setCreditMemos(res.data.credit_memos || []);
+      setUnappliedReceipts(res.data.unapplied_receipts || []);
+      setCreditContext(res.data.credit_context);
     } catch (e: any) {
       setMappingOptionsError(formatApiError(e, "Could not load invoices for that customer."));
     }
@@ -344,6 +366,17 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
               ) : selectedCustomerForMapping ? (
                 <p className="text-[12px] text-gray-400 italic">No open invoices found for this customer.</p>
               ) : null}
+
+              {/* The negative half of the aging report for this customer.
+                  Renders nothing when there is none, so rows for customers
+                  with no credit memos look exactly as they did before.
+                  Informational — see the component's own docstring for why
+                  these are not selectable. */}
+              <CustomerCreditsPanel
+                creditMemos={creditMemos}
+                unappliedReceipts={unappliedReceipts}
+                context={creditContext}
+              />
 
               {/* Live qualification feedback */}
               {selectedInvoiceNumbers.size > 0 && (

@@ -98,6 +98,35 @@ export const OVERPAYMENT_REASON_DETAIL: Record<string, string> = {
     "Nothing in the aging report accounts for it. The customer's remittance advice is likely needed.",
 };
 
+// The mirror of the two maps above, for a SHORT payment. Computed by
+// rule_engine/shortage_reason.py; see that module for how each is decided.
+//
+// Wording rule, same as overpayment: these are SUGGESTIONS, not findings.
+// Every one of them comes from amounts lining up in the aging report, not
+// from the customer telling us anything, so nothing here is phrased as a
+// fact. The one exception is DEDUCTION_STATED, where the customer's own
+// remittance did declare the deduction.
+export const SHORTAGE_REASON_LABEL: Record<string, string> = {
+  CREDIT_MEMO_EXACT_MATCH: "Open credit memo matches the shortfall",
+  CREDIT_MEMO_AMBIGUOUS:   "Several credit memos match the shortfall",
+  CREDIT_MEMO_AVAILABLE:   "Customer holds open credit memos",
+  DEDUCTION_STATED:        "Deduction stated on the remittance",
+  SHORTAGE_UNEXPLAINED:    "No explanation found",
+};
+
+export const SHORTAGE_REASON_DETAIL: Record<string, string> = {
+  CREDIT_MEMO_EXACT_MATCH:
+    "One open credit memo is for exactly the missing amount — the customer most likely deducted it before paying. It is still open in Oracle, so it needs applying there or it can be claimed again.",
+  CREDIT_MEMO_AMBIGUOUS:
+    "More than one open credit memo is for exactly the missing amount, so none is suggested — picking between identical candidates would be a guess. Check the customer's remittance advice.",
+  CREDIT_MEMO_AVAILABLE:
+    "This customer holds open credit memos, but none matches the missing amount on its own. Combinations are deliberately not searched — with this many credit memos some combination fits almost any figure, which would look like an answer without being one.",
+  DEDUCTION_STATED:
+    "The customer's remittance declared a deduction (withholding tax, bank charges or similar) that accounts for the gap.",
+  SHORTAGE_UNEXPLAINED:
+    "Nothing in the aging report accounts for it. The customer's remittance advice is likely needed.",
+};
+
 // The two outcomes a SPOC picks between on an overpaid row. Kept here so the
 // dialog, the row-detail card and any future surface all say the same thing —
 // the whole problem this replaced was two screens describing the same action

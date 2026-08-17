@@ -79,6 +79,7 @@ import DistributedSummaryCard from "@/components/row-detail/DistributedSummaryCa
 import AgingSnapshotCard from "@/components/row-detail/AgingSnapshotCard";
 import WhyStatusCard from "@/components/row-detail/WhyStatusCard";
 import OverpaymentCard from "@/components/row-detail/OverpaymentCard";
+import ShortageCard from "@/components/row-detail/ShortageCard";
 import HandleOverpaymentModal from "@/components/row-detail/HandleOverpaymentModal";
 import OracleFusionCard from "@/components/row-detail/OracleFusionCard";
 import EditGlRateModal from "@/components/row-detail/EditGlRateModal";
@@ -403,6 +404,11 @@ export default function RowDetailPage() {
                 — the backend returns null for everything else. Sits directly
                 below "Why this status" because it IS the why for these rows. */}
             {detail.overpayment && <OverpaymentCard op={detail.overpayment} />}
+
+            {/* Same contract, opposite sign — null for anything that isn't a
+                short payment. A row is never both, so these two never render
+                together. */}
+            {detail.shortage && <ShortageCard sh={detail.shortage} />}
 
             {showOracleCard && (
               <OracleFusionCard oracle={oracle} creditAmount={credit_amount} hasOraclePayload={hasOraclePayload} fx={detail.fx} />
