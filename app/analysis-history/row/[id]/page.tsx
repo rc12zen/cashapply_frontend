@@ -61,7 +61,7 @@
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { approveEntry, rejectEntry, reopenEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, settlementOverride, parkOverpayment } from "@/lib/api";
+import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, settlementOverride, parkOverpayment } from "@/lib/api";
 
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
@@ -83,6 +83,8 @@ import ShortageCard from "@/components/row-detail/ShortageCard";
 import HandleOverpaymentModal from "@/components/row-detail/HandleOverpaymentModal";
 import OracleFusionCard from "@/components/row-detail/OracleFusionCard";
 import EditGlRateModal from "@/components/row-detail/EditGlRateModal";
+import RejectRowModal from "@/components/row-detail/RejectRowModal";
+import ReopenAndReviewModal from "@/components/row-detail/ReopenAndReviewModal";
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -126,24 +128,35 @@ export default function RowDetailPage() {
     setActionLoading(false);
   };
 
-  const handleReject = async () => {
-    if (!detail) return;
-    setActionLoading(true); setActionError("");
-    try { await rejectEntry(recordId); await fetchDetail(); }
-    catch (e: any) { setActionError(formatApiError(e)); }
-    setActionLoading(false);
+  // Reject now collects a REASON first (RejectRowModal). The backend always
+  // accepted one; nothing ever sent it, so every rejection was reasonless —
+  // which left the reopen screen with nothing to explain itself with.
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [rejectBusy, setRejectBusy]           = useState(false);
+  const [rejectError, setRejectError]         = useState("");
+
+  const handleReject = () => { setRejectError(""); setRejectModalOpen(true); };
+
+  const submitReject = async (comment: string) => {
+    setRejectBusy(true); setRejectError("");
+    try {
+      await rejectEntry(recordId, comment || undefined);
+      setRejectModalOpen(false);
+      await fetchDetail();
+    } catch (e: any) {
+      setRejectError(formatApiError(e, "Could not reject this row."));
+    }
+    setRejectBusy(false);
   };
 
-  const handleReopen = async () => {
-    if (!detail) return;
-    setActionLoading(true); setActionError("");
-    // The backend blocks reopen (with a clear reason) if the invoice is gone
-    // from the current aging report or now claimed elsewhere — surface that
-    // message rather than a generic failure.
-    try { await reopenEntry(recordId); await fetchDetail(); }
-    catch (e: any) { setActionError(formatApiError(e, "Could not reopen this row.")); }
-    setActionLoading(false);
-  };
+  // Reopen opens the Reopen & Review modal rather than firing immediately.
+  // Reject never rewrites rule_id, and the bucket derives FROM rule_id, so the
+  // old one-click undo always handed the row back in the bucket it was rejected
+  // from with the same mapping. The modal is what lets the SPOC change something
+  // and have the bucket recompute — see hitl/reopen_with_edits.py.
+  const [reopenModalOpen, setReopenModalOpen] = useState(false);
+
+  const handleReopen = () => setReopenModalOpen(true);
 
   // An overpaid row has ONE entry point — see HandleOverpaymentModal. The dialog
   // owns the choice; this component only executes whichever outcome came back.
@@ -452,6 +465,23 @@ export default function RowDetailPage() {
           options={detail.overpayment.disposition_options}
           busy={parkBusy}
           error={parkError}
+        />
+      )}
+
+      {rejectModalOpen && (
+        <RejectRowModal
+          saving={rejectBusy}
+          error={rejectError}
+          onCancel={() => { setRejectModalOpen(false); setRejectError(""); }}
+          onSubmit={submitReject}
+        />
+      )}
+
+      {reopenModalOpen && (
+        <ReopenAndReviewModal
+          recordId={recordId}
+          onCancel={() => setReopenModalOpen(false)}
+          onDone={fetchDetail}
         />
       )}
     </div>

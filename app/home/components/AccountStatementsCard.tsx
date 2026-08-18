@@ -20,6 +20,11 @@ interface AccountStatementsCardProps {
   /** Specific reason the gate is blocking (why AI is unavailable). Shown when
    *  !aiReady. Built by app/home/page.tsx's aiGateReason(). */
   aiReason: string;
+  /** A statement is already sitting in the list below — only one may be
+   *  listed at a time (analysed, pending configuration, or anything else),
+   *  so Upload is blocked until it's removed. See app/home/page.tsx's
+   *  hasQueuedStatement. */
+  hasQueuedStatement: boolean;
   statementGroups: StatementGroup[];
   isStatementSelected: (s: StatementGroup) => boolean;
   toggleStatementSelected: (s: StatementGroup) => void;
@@ -42,7 +47,7 @@ interface AccountStatementsCardProps {
  */
 export default function AccountStatementsCard({
   statementInputRef, onStatementUpload, statementUploading, aiReady, aiReason,
-  statementGroups, isStatementSelected, toggleStatementSelected,
+  hasQueuedStatement, statementGroups, isStatementSelected, toggleStatementSelected,
   detectionInfo, onOpenResolveForFile, onOpenWizardForFile, onRemoveFile,
 }: AccountStatementsCardProps) {
   return (
@@ -71,13 +76,22 @@ export default function AccountStatementsCard({
       <div className="mt-3 pt-2 border-t border-gray-100 space-y-2.5">
         <button
           onClick={() => statementInputRef.current?.click()}
-          disabled={statementUploading || !aiReady}
-          title={!aiReady ? aiReason : undefined}
+          disabled={statementUploading || !aiReady || hasQueuedStatement}
+          title={
+            !aiReady ? aiReason
+            : hasQueuedStatement ? "A statement is already in the list — remove it before uploading another."
+            : undefined
+          }
           style={{ width: "100%" }}
           className="flex w-full box-border items-center justify-center gap-2 rounded-xl border border-dashed border-gray-300 hover:border-primary text-primary px-3.5 py-2.5 text-[11px] font-bold uppercase tracking-wider bg-gray-50/50 hover:bg-gray-50 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed h-[62px]"
         >
           <UploadCloud size={14} className="text-[#222222]" />
-          <span>{statementUploading ? "Uploading…" : !aiReady ? "Upload Unavailable" : "Upload"}</span>
+          <span>
+            {statementUploading ? "Uploading…"
+              : !aiReady ? "Upload Unavailable"
+              : hasQueuedStatement ? "Remove Current File First"
+              : "Upload"}
+          </span>
         </button>
         {statementGroups.length > 0 && (
           <div className="space-y-2.5 max-h-[220px] overflow-y-auto">

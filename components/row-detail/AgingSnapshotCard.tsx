@@ -29,6 +29,25 @@ export default function AgingSnapshotCard({
   // invoice currency — not the raw creditAmount, which is in credited
   // currency and would flag a false mismatch on any cross-currency row.
   const creditInInvoiceCcy = fx ? fx.credit_amount_invoice_ccy : creditAmount;
+
+  // PATCH: the footer used to print the `sumRefs` prop, which the page derives
+  // from oracle.payload.remittanceReferences. But
+  // build_receipt_creation_payload() NEVER emits remittanceReferences — those
+  // are a separate POST made after approval (see its docstring). So before a
+  // row is posted that sum is always 0, and the footer read
+  // "0.00 ⚠ mismatch" while the Allocated column right above it showed real
+  // per-invoice figures. Two different sources for one number.
+  //
+  // The footer now totals exactly what its own rows display. Post-posting the
+  // reference payload agrees with these anyway, so this is the same number
+  // when the payload exists and a correct one when it doesn't. `sumRefs` is
+  // still accepted (and preferred once genuinely populated) so nothing else
+  // that passes it changes behaviour.
+  const sumAllocated = confirmedInvoices.reduce(
+    (s, inv) => s + Number(inv.remittance_amount ?? inv.computed_amount ?? 0), 0,
+  );
+  const allocatedTotal = sumRefs > 0 ? sumRefs : sumAllocated;
+  const balanced = Math.abs(allocatedTotal - creditInInvoiceCcy) < 0.02;
   const showConversion = !!(fx && fx.is_cross_currency && fx.fx_credit_to_invoice);
   const invoiceCcy = fx?.invoice_currency || confirmedInvoices[0]?.currency || bankCurrency;
   return (
@@ -78,9 +97,9 @@ export default function AgingSnapshotCard({
                 <td colSpan={3} className="px-4 py-2.5 text-[9px] font-black text-gray-400 uppercase tracking-wider">Total</td>
                 <td className="px-4 py-2.5 font-mono font-black text-right text-[#222222]">{fmt(sumOutstanding)}</td>
                 <td colSpan={2} />
-                <td className={`px-4 py-2.5 font-mono font-black text-right ${Math.abs(sumRefs - creditInInvoiceCcy) < 0.02 ? "text-emerald-700" : "text-red-600"}`}>
-                  {fmt(sumRefs)}
-                  {Math.abs(sumRefs - creditInInvoiceCcy) >= 0.02 && <span className="ml-1.5 text-[9px]">⚠ mismatch</span>}
+                <td className={`px-4 py-2.5 font-mono font-black text-right ${balanced ? "text-emerald-700" : "text-red-600"}`}>
+                  {fmt(allocatedTotal)}
+                  {!balanced && <span className="ml-1.5 text-[9px]">⚠ mismatch</span>}
                 </td>
               </tr>
               <tr className="bg-blue-50/50">
