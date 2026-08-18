@@ -355,10 +355,41 @@ export default function ReopenAndReviewModal({
                           </span>
                         )}
                       </div>
+                      {/* The customer only appears here when it is actually
+                          changing. Without it, changing Esko -> Beckman on a row
+                          whose rule stays "Exact match" looked like nothing had
+                          happened at all. */}
+                      {to?.customer_name !== from?.customer_name && (
+                        <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                          <span className="text-gray-500">{from?.customer_name || "—"}</span>
+                          <ArrowRight size={11} className="text-gray-400 shrink-0" />
+                          <span className="font-semibold text-emerald-700">{to?.customer_name || "—"}</span>
+                        </div>
+                      )}
                       {to?.target_total != null && (
                         <p className="text-[11px] text-gray-600 font-mono">
                           Invoices total {fmt(to.target_total)}
-                          {to.shortfall_pct != null && <> · shortfall {to.shortfall_pct}%</>}
+                          {/* A NEGATIVE shortfall is an overpayment. Printing
+                              "shortfall -405%" is not just ugly, it reads as the
+                              opposite of what happened. */}
+                          {to.shortfall_pct != null && to.shortfall_pct > 0 && (
+                            <> · short by {to.shortfall_pct}%</>
+                          )}
+                          {to.shortfall_pct != null && to.shortfall_pct < 0 && (
+                            <> · overpaid by {Math.abs(to.shortfall_pct)}%</>
+                          )}
+                          {to.shortfall_pct === 0 && <> · fully covered</>}
+                        </p>
+                      )}
+                      {/* Unticking everything is a legitimate decision ("none of
+                          these are right"), not an error — but the consequence
+                          has to be spelled out, because the row stops being
+                          postable and goes back into a queue. */}
+                      {preview.route === "cleared_mapping" && (
+                        <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-sm px-2.5 py-2 leading-snug">
+                          No invoices selected. The row will be reopened with
+                          <span className="font-semibold"> no invoice mapping</span> and go back
+                          into the queue to be mapped. Any invoices it had claimed are released.
                         </p>
                       )}
                       {blockers.length > 0 && (
