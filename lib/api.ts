@@ -1,6 +1,7 @@
 import axios from "axios";
 import { IS_LOCAL_DEV } from "./msalConfig";
 import { getAccessToken } from "./msalToken";
+import { encryptionEnabled, looksLikeEnvelope, openText, sealText } from "./crypto/envelope";
 
 // Points at the backend API. NEXT_PUBLIC_API_BASE_URL must be set for
 // UAT/prod (there's no sensible default other than localhost, which only
@@ -48,6 +49,75 @@ API.interceptors.request.use(async (config) => {
   }
   return config;
 });
+
+// ── API payload encryption (VAPT remediation) ───────────────────────────────
+//
+// Request bodies go out sealed; response bodies come back opened. Everything
+// downstream of here is unchanged: all 96 exported helpers in this file still
+// send and receive ordinary objects, and no component knows encryption
+// exists.
+//
+// The crypto itself lives in lib/crypto/envelope.ts. These interceptors only
+// decide WHAT to seal and WHEN — axios never touches a key or a cipher, which
+// is what keeps this file a transport concern and that one independently
+// testable.
+//
+// Whether it is active is decided solely by whether the build has a key
+// (NEXT_PUBLIC_API_ENCRYPTION_KEY). One switch, so the frontend cannot
+// disagree with itself about whether it is encrypting.
+API.interceptors.request.use(async (config) => {
+  if (!encryptionEnabled) return config;
+
+  const data = config.data;
+  if (data === undefined || data === null) return config; // GETs and bodiless calls
+
+  // Multipart uploads and binary bodies are passed through untouched: there is
+  // no sane way to JSON-wrap a file stream, and the backend skips decryption
+  // for non-JSON content types to match (see crypto/middleware.py). Their
+  // RESPONSES are still encrypted — the two directions are judged separately.
+  if (typeof FormData !== "undefined" && data instanceof FormData) return config;
+  if (typeof Blob !== "undefined" && data instanceof Blob) return config;
+  if (data instanceof ArrayBuffer) return config;
+
+  // A string body is assumed to be JSON already; re-stringifying it would
+  // double-encode it into a quoted string the backend could not parse.
+  const plaintext = typeof data === "string" ? data : JSON.stringify(data);
+  config.data = await sealText(plaintext);
+  config.headers.set("Content-Type", "application/json");
+  return config;
+});
+
+// Registered BEFORE the 401 handler below so it runs first (axios walks
+// response interceptors in registration order) — the 401 redirect reads only
+// the status code, but any future handler that reads an error MESSAGE needs
+// the body already decrypted by the time it runs.
+//
+// Both halves check the body rather than assuming, because several responses
+// are plaintext by design on the backend: /health, the four file downloads,
+// and the generic 500 body from Starlette's outermost error handler, which
+// sits outside all middleware and so cannot be encrypted.
+API.interceptors.response.use(
+  async (response) => {
+    if (looksLikeEnvelope(response.data)) {
+      response.data = JSON.parse(await openText(response.data));
+    }
+    return response;
+  },
+  async (error) => {
+    const body = error?.response?.data;
+    if (looksLikeEnvelope(body)) {
+      try {
+        error.response.data = JSON.parse(await openText(body));
+      } catch {
+        // Leave the sealed body in place rather than masking the original
+        // failure with a decryption error. The status code still drives the
+        // 401 redirect below, and error.response.data being unreadable is
+        // strictly better than losing the HTTP error it came with.
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 // A 401 means: local dev — the dev-bypass cookie is missing/unrecognized;
 // UAT/prod — the Azure token is missing, expired, or the account isn't
