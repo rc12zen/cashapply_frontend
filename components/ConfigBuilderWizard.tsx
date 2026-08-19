@@ -350,7 +350,11 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
     const ext = previewData?.extension ?? "xlsx";
     const isCsv = ext === "csv" || ext === "txt";
     const headerCfg: Record<string, unknown> = { row: headerRow ?? 0 };
-    if (!isCsv && subHeaderRow !== null) {
+    // Sub-header applies to BOTH engines. It used to be Excel-only (`!isCsv`),
+    // which silently dropped merge_rows from a CSV recipe -- the wizard's
+    // sub-header picker was hidden for CSV, so it could not be reached anyway.
+    // csv_extractor.py now honours merge_rows the same way excel.py does.
+    if (subHeaderRow !== null) {
       headerCfg.merge_rows = [{
         row: subHeaderRow,
         rules: mergeRules.map((r) => ({ sub_value: r.sub_value, rename_parent_to: r.rename_parent_to })),
@@ -363,21 +367,12 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
 
   // ── Build the recipe draft (account_locator + source + fields + credit_rule + …) ─
   const buildConfigDraft = useCallback(() => {
-    const ext = previewData?.extension ?? "xlsx";
-    const isCsv = ext === "csv" || ext === "txt";
-
-    const headerCfg: Record<string, unknown> = { row: headerRow ?? 0 };
-
-    if (!isCsv && subHeaderRow !== null) {
-      headerCfg.merge_rows = [{
-        row: subHeaderRow,
-        rules: mergeRules.map((r) => ({
-          sub_value: r.sub_value,
-          rename_parent_to: r.rename_parent_to,
-        })),
-      }];
-    }
-
+    // The source block (engine / sheet / header / merge_rows) is built solely by
+    // buildSource() below. This function used to recompute ext, isCsv and a
+    // headerCfg of its own and then discard them -- which is what the
+    // `void isCsv; void headerCfg;` line existed to hide from the linter.
+    // Removed rather than kept in step, so there is one place that decides how
+    // the header is described.
     const fields = LOGICAL_FIELDS.map(({ name }) => {
       const src = fieldMappings[name];
       let fromObj: Record<string, unknown>;
@@ -397,7 +392,6 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
       return { name, from: fromObj };
     });
 
-    void isCsv; void headerCfg;
     // A recipe: account_locator + source + fields + credit_rule + cleanup. No
     // fingerprints/filename — the account number identifies the file.
     return {
@@ -954,7 +948,6 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   setSubHeaderRow,
                   mergeRules, setMergeRules, handleRowClick,
                   derivedColumns: columns,
-                  isCsv: ["csv", "txt"].includes(previewData?.extension ?? ""),
                   duplicateShapeSheets,
                 }} />
               )}
@@ -1121,7 +1114,7 @@ function StepPreview({
 function StepHeader({
   previewData, selectedSheet, setSelectedSheet,
   headerRow, subHeaderRow, pickingSubHeader, setPickingSubHeader, setSubHeaderRow,
-  mergeRules, setMergeRules, handleRowClick, derivedColumns, isCsv,
+  mergeRules, setMergeRules, handleRowClick, derivedColumns,
   duplicateShapeSheets,
 }: {
   previewData: RawPreviewData | null;
@@ -1137,7 +1130,6 @@ function StepHeader({
   setMergeRules: (r: MergeRule[]) => void;
   handleRowClick: (i: number) => void;
   derivedColumns: string[];
-  isCsv: boolean;
 }) {
   const activeSheet = previewData?.sheets.find((s) => s.name === selectedSheet);
   const rows        = activeSheet?.rows ?? [];
@@ -1216,7 +1208,10 @@ function StepHeader({
                 Sub-header: Row {subHeaderRow}
               </div>
             )}
-            {!isCsv && (subHeaderRow === null ? (
+            {/* Offered for CSV as well as Excel: a two-row header is just as
+                common in a .csv statement, and csv_extractor.py now honours
+                merge_rows. Previously hidden behind !isCsv. */}
+            {subHeaderRow === null ? (
               <button
                 onClick={() => setPickingSubHeader(true)}
                 className="flex items-center gap-1 text-[#222222] hover:underline font-bold cursor-pointer"
@@ -1230,11 +1225,12 @@ function StepHeader({
               >
                 Remove sub-header
               </button>
-            ))}
+            )}
           </div>
 
-          {/* Merge rules (only when sub-header selected, not for CSV) */}
-          {!isCsv && subHeaderRow !== null && (
+          {/* Merge rules — shown whenever a sub-header row is selected, for
+              either engine. */}
+          {subHeaderRow !== null && (
             <div className="bg-amber-50 border border-amber-200 rounded p-3 space-y-2">
               <div className="flex items-center gap-2 text-xs font-bold text-amber-700">
                 <Info size={13} /> Define how sub-header values rename the parent column
