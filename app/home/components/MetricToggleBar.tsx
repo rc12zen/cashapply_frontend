@@ -1,5 +1,6 @@
 "use client";
 import { METRIC_CONFIG, METRIC_GROUP_KEY, type MetricKey } from "../types";
+import { accentBgClass, accentBorderClass } from "@/lib/accentColor";
 
 interface MetricToggleBarProps {
   title: string;
@@ -37,17 +38,14 @@ export default function MetricToggleBar({
               key={key}
               type="button"
               onClick={() => setActiveMetrics((prev) => ({ ...prev, [key]: !prev[key] }))}
-              className={`flex items-center gap-2 px-3 py-2 rounded-full border text-xs font-bold transition-all shadow-xs cursor-pointer ${active ? "text-primary" : "border-gray-200 bg-white text-gray-400 hover:border-gray-300"}`}
-              style={{ borderColor: active ? cfg.color : "" }}
+              className={`flex items-center gap-2 px-3 py-2 rounded-full border text-xs font-bold transition-all shadow-xs cursor-pointer ${active ? `text-primary ${accentBorderClass(cfg.color)}` : "border-gray-200 bg-white text-gray-400 hover:border-gray-300"}`}
             >
               <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ backgroundColor: active ? cfg.color : "#d1d5db" }}
+                className={`w-2 h-2 rounded-full shrink-0 ${active ? accentBgClass(cfg.color) : "bg-gray-300"}`}
               />
               <span>{cfg.name}</span>
               <span
-                className={`px-1.5 py-0.5 text-[10px] rounded-full font-bold ${active ? "text-white" : "bg-gray-100 text-gray-400"}`}
-                style={{ backgroundColor: active ? cfg.color : "" }}
+                className={`px-1.5 py-0.5 text-[10px] rounded-full font-bold ${active ? `text-white ${accentBgClass(cfg.color)}` : "bg-gray-100 text-gray-400"}`}
               >
                 {fmt(val)}
               </span>

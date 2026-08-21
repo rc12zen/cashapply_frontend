@@ -37,7 +37,7 @@ export default function PaymentReceivedCard({ recordId, bs }: { recordId: number
           {/* Amount — prominently sized */}
           <div className="flex items-center justify-between gap-4 py-3 border-b border-gray-100">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider shrink-0">Amount credited</span>
-            <span className="font-mono font-black text-[#222222]" style={{ fontSize: "22px", letterSpacing: "-0.02em" }}>
+            <span className="font-mono font-black text-[#222222] text-[22px] tracking-[-0.02em]">
               {fmt(bs.credit_amount)}
               <span className="text-sm font-bold text-gray-400 ml-2">{bs.currency}</span>
             </span>

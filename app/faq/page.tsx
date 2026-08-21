@@ -3,7 +3,14 @@
  * =========================
  * Static content page per the CashApply_FAQ_Page.html reference. No client
  * state needed — <details>/<summary> handles the expand/collapse natively.
+ *
+ * Already a genuine Server Component (no "use client"), so unlike every
+ * other page in this app, force-dynamic can be added directly here without
+ * a Server/Client split -- see app/home/page.tsx etc. for why that split
+ * was needed elsewhere (strict-dynamic CSP compatibility).
  */
+export const dynamic = "force-dynamic";
+
 
 
 

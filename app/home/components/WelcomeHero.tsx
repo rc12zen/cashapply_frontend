@@ -8,8 +8,7 @@ export default function WelcomeHero({ userDisplayName }: { userDisplayName: stri
           fills the empty right-hand space with something that feels designed
           rather than incidental. */}
       <div
-        className="absolute -top-10 -right-10 w-56 h-56 rounded-full pointer-events-none"
-        style={{ background: "radial-gradient(circle, rgba(34,34,34,0.06) 0%, rgba(34,34,34,0) 70%)" }}
+        className="absolute -top-10 -right-10 w-56 h-56 rounded-full pointer-events-none bg-[radial-gradient(circle,rgba(34,34,34,0.06)_0%,rgba(34,34,34,0)_70%)]"
       />
       <div className="max-w-4xl relative">
         <div className="flex items-center gap-2.5 mb-2">

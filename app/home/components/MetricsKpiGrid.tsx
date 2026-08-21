@@ -1,5 +1,6 @@
 "use client";
 import type { KpiItem } from "../types";
+import { accentBgClass } from "@/lib/accentColor";
 
 interface MetricsKpiGridProps {
   emoji: string;
@@ -39,7 +40,7 @@ export default function MetricsKpiGrid({
       <div className={`grid ${gridCols} gap-3`}>
         {items.map(({ icon, label, value, sub, accent }) => (
           <div key={label} className="border border-gray-200 rounded-sm bg-white shadow-xs overflow-hidden">
-            <div className="h-0.5" style={{ backgroundColor: accent }} />
+            <div className={`h-0.5 ${accentBgClass(accent)}`} />
             <div className={padClass}>
               <div className="flex items-center gap-1.5 text-gray-400 mb-2">
                 {icon}

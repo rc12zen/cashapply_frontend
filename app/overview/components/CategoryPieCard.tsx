@@ -1,4 +1,5 @@
 "use client";
+import { accentBgClass } from "@/lib/accentColor";
 /**
  * CategoryPieCard
  * =================
@@ -104,7 +105,7 @@ export default function CategoryPieCard({
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-6 pb-5 pt-1.5">
           {data.map((d) => (
             <div key={d.id} className="flex items-center gap-2 text-[12.5px] text-[#3B4559]">
-              <span className="w-[9px] h-[9px] rounded-full shrink-0" style={{ background: d.color }} />
+              <span className={`w-[9px] h-[9px] rounded-full shrink-0 ${accentBgClass(d.color)}`} />
               {d.name} — {fmt(d.value)}
             </div>
           ))}

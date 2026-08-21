@@ -28,9 +28,10 @@
  * selected; nothing about the filter logic itself changed.
  */
 import { Download, FileText, Layers, Loader2, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { downloadAgingReport, getAgingPreview, getFilePreview } from "@/lib/api";
 import { downloadBlob } from "@/lib/download";
+import { useNonce } from "@/lib/nonceContext";
 
 type PreviewSource = "statement" | "aging_run" | "aging_active";
 
@@ -40,6 +41,10 @@ function PreviewTable({ preview, filter, onFilterChange, onDownload }: {
   onFilterChange: (v: string) => void;
   onDownload?: () => void;
 }) {
+  const nonce = useNonce();
+  // useId() includes colons, invalid in a plain CSS ID selector -- strip
+  // to alphanumerics, same pattern as components/users/RoleMultiSelect.tsx.
+  const tableId = "preview-table-" + useId().replace(/[^a-zA-Z0-9]/g, "");
   const filteredRows = useMemo(() => {
     if (!preview || !filter) return preview?.rows ?? [];
     const q = filter.toLowerCase();
@@ -73,7 +78,15 @@ function PreviewTable({ preview, filter, onFilterChange, onDownload }: {
         </div>
       </div>
       <div className="flex-1 overflow-auto">
-        <table className="w-full text-left border-collapse text-[10px]" style={{ minWidth: `${preview.columns.length * 110}px` }}>
+        {/* Width depends on preview.columns.length -- genuinely dynamic
+            (varies per uploaded file, unbounded), not a small fixed set of
+            values, so it can't become a static Tailwind class. CSP has no
+            nonce mechanism for the style="" ATTRIBUTE (only for <style>
+            elements), so the width rule lives here instead, scoped to this
+            instance's unique id, with the SAME nonce middleware.ts put in
+            the CSP header for this request. */}
+        <style nonce={nonce}>{`#${tableId} { min-width: ${preview.columns.length * 110}px; }`}</style>
+        <table id={tableId} className="w-full text-left border-collapse text-[10px]">
           <thead className="sticky top-0 z-10">
             <tr className="bg-[#222222] text-white">
               <th className="px-2 py-2 text-[9px] font-black uppercase tracking-wider text-white/50 w-10 text-center bg-[#222222]">#</th>

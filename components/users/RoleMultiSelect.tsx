@@ -17,8 +17,9 @@
  *    Position is recomputed on scroll/resize so it stays anchored.
  */
 import { Check, ChevronDown } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useNonce } from "@/lib/nonceContext";
 
 export interface RoleOption {
   id: number;
@@ -49,6 +50,10 @@ export default function RoleMultiSelect({
   });
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const nonce = useNonce();
+  // useId() includes colons (e.g. ":r0:"), invalid in a plain CSS ID
+  // selector -- strip to alphanumerics so it's safe to use directly below.
+  const menuId = "role-menu-" + useId().replace(/[^a-zA-Z0-9]/g, "");
 
   const recompute = useCallback(() => {
     const btn = btnRef.current;
@@ -116,44 +121,57 @@ export default function RoleMultiSelect({
 
       {open && !disabled && typeof document !== "undefined" &&
         createPortal(
-          <div
-            ref={menuRef}
-            style={{
-              position: "fixed",
-              left: pos.left,
-              top: pos.top,
-              bottom: pos.bottom,
-              width: Math.max(pos.width, 224),
-              maxHeight: MENU_MAX_HEIGHT,
-            }}
-            className="z-50 overflow-y-auto bg-white border border-gray-200 rounded-sm shadow-lg py-1"
-          >
-            {roles.map((r) => {
-              const checked = selected.includes(r.name);
-              return (
-                <button
-                  type="button"
-                  key={r.id}
-                  onClick={() => toggle(r.name)}
-                  className="w-full flex items-start gap-2 px-3 py-1.5 hover:bg-gray-50 text-left cursor-pointer"
-                >
-                  <span
-                    className={`mt-0.5 h-3.5 w-3.5 rounded-xs border shrink-0 flex items-center justify-center ${
-                      checked ? "bg-[#222222] border-[#222222]" : "border-gray-300"
-                    }`}
+          <>
+            {/* Position is genuinely dynamic (arbitrary pixel coordinates
+                from getBoundingClientRect(), recomputed on scroll/resize) --
+                not a small fixed set of values, so it can't become a static
+                Tailwind class. CSP has no nonce mechanism for the style=""
+                ATTRIBUTE (only for <style> elements), so the position rules
+                live here instead, scoped to this instance's unique id, with
+                the SAME nonce middleware.ts put in the CSP header for this
+                request. */}
+            <style nonce={nonce}>{`
+              #${menuId} {
+                position: fixed;
+                left: ${pos.left}px;
+                ${pos.top !== undefined ? `top: ${pos.top}px;` : ""}
+                ${pos.bottom !== undefined ? `bottom: ${pos.bottom}px;` : ""}
+                width: ${Math.max(pos.width, 224)}px;
+                max-height: ${MENU_MAX_HEIGHT}px;
+              }
+            `}</style>
+            <div
+              id={menuId}
+              ref={menuRef}
+              className="z-50 overflow-y-auto bg-white border border-gray-200 rounded-sm shadow-lg py-1"
+            >
+              {roles.map((r) => {
+                const checked = selected.includes(r.name);
+                return (
+                  <button
+                    type="button"
+                    key={r.id}
+                    onClick={() => toggle(r.name)}
+                    className="w-full flex items-start gap-2 px-3 py-1.5 hover:bg-gray-50 text-left cursor-pointer"
                   >
-                    {checked && <Check size={10} className="text-white" />}
-                  </span>
-                  <span>
-                    <span className="block text-[11px] font-bold text-primary">{r.name}</span>
-                    {r.description && (
-                      <span className="block text-[10px] text-gray-400 leading-tight">{r.description}</span>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </div>,
+                    <span
+                      className={`mt-0.5 h-3.5 w-3.5 rounded-xs border shrink-0 flex items-center justify-center ${
+                        checked ? "bg-[#222222] border-[#222222]" : "border-gray-300"
+                      }`}
+                    >
+                      {checked && <Check size={10} className="text-white" />}
+                    </span>
+                    <span>
+                      <span className="block text-[11px] font-bold text-primary">{r.name}</span>
+                      {r.description && (
+                        <span className="block text-[10px] text-gray-400 leading-tight">{r.description}</span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </>,
           document.body,
         )}
     </div>
