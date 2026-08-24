@@ -4,12 +4,18 @@
 // currency dropdown. The backend is authoritative (it re-normalizes at save
 // and per-row parse); this keeps the wizard UX in sync.
 
+// Keep in lockstep with the backend set -- this list drives the wizard's
+// currency dropdown, so a code missing HERE cannot be selected at all, which
+// blocks the config save outright (the wizard requires a currency). That is
+// exactly how COP and RSD came to be added: both were already in the backend's
+// FX rate map, so the system could convert them but not onboard an account in
+// them.
 export const ISO_4217: string[] = [
-  "AED", "AUD", "BHD", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EGP",
-  "EUR", "GBP", "HKD", "HUF", "IDR", "ILS", "INR", "JPY", "KES", "KRW",
-  "KWD", "LKR", "MAD", "MXN", "MYR", "NGN", "NOK", "NZD", "OMR", "PHP",
-  "PKR", "PLN", "QAR", "RON", "RUB", "SAR", "SEK", "SGD", "THB", "TRY",
-  "TWD", "TZS", "UGX", "USD", "VND", "ZAR",
+  "AED", "AUD", "BHD", "BRL", "CAD", "CHF", "CNY", "COP", "CZK", "DKK",
+  "EGP", "EUR", "GBP", "HKD", "HUF", "IDR", "ILS", "INR", "JPY", "KES",
+  "KRW", "KWD", "LKR", "MAD", "MXN", "MYR", "NGN", "NOK", "NZD", "OMR",
+  "PHP", "PKR", "PLN", "QAR", "RON", "RSD", "RUB", "SAR", "SEK", "SGD",
+  "THB", "TRY", "TWD", "TZS", "UGX", "USD", "VND", "ZAR",
 ];
 
 const ISO_SET = new Set(ISO_4217);
