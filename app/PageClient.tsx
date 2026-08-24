@@ -18,8 +18,15 @@
  * the white card. The Z-logo gif moved off the hero spot entirely (it's
  * now a small decorative badge in the dark panel's corner) since the
  * brand wordmark, not the animated badge, is the primary mark here.
+ *
+ * PATCH: the product name "FusionAutoLockBox" was previously set as one
+ * jammed all-caps word (FUSIONAUTOLOCKBOX) — unreadable at a glance. It's
+ * now a proper mixed-case wordmark ("Fusion" + "AutoLockBox", the internal
+ * capitals giving natural word breaks), split into two colors for extra
+ * legibility, with a small lock-glyph badge alongside it — a nod to the
+ * "lockbox" in the name rather than a purely typographic fix.
  */
-import { AlertTriangle, ArrowRight, Mail } from "lucide-react";
+import { AlertTriangle, ArrowRight, Lock, Mail } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type React from "react";
 import { useState } from "react";
@@ -229,12 +236,27 @@ export default function LoginScreen() {
 						alt="Zensar"
 						width={225}
 						height={125}
-						className="object-contain h-16 w-auto mx-auto mb-8"
+						className="object-contain h-14 w-auto mx-auto mb-9"
 					/>
-					<h1 className="text-3xl font-black tracking-tight text-white uppercase">
-						FusionAutoLockBox
-					</h1>
-					<p className="text-sm text-white/60 font-medium max-w-[320px] mx-auto mt-3 leading-relaxed">
+
+					{/* Wordmark: mixed-case "Fusion" + "AutoLockBox" (the internal
+					     capitals in "AutoLockBox" give it natural word breaks) rather
+					     than the previous all-caps "FUSIONAUTOLOCKBOX" run-together
+					     word, plus a small lock-glyph badge as a lightweight logo mark
+					     for the product itself. */}
+					<div className="flex items-center justify-center gap-3">
+						<div className="h-11 w-11 rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center shadow-lg shadow-emerald-500/30 shrink-0">
+							<Lock size={19} className="text-[#0B0C0E]" strokeWidth={2.5} />
+						</div>
+						<h1 className="text-4xl font-black tracking-tight text-white leading-none">
+							Fusion{" "}
+							<span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-300">
+								Auto LockBox
+							</span>
+						</h1>
+					</div>
+
+					<p className="text-sm text-white/60 font-medium max-w-[320px] mx-auto mt-5 leading-relaxed">
 						From bank statement to Fusion, reconciled in seconds.
 					</p>
 				</div>
@@ -262,9 +284,16 @@ export default function LoginScreen() {
 							alt="Zensar"
 							width={160}
 							height={91}
-							className="object-contain h-10 w-auto mx-auto mb-4 invert"
+							className="object-contain h-9 w-auto mx-auto mb-4 invert"
 						/>
-						<h1 className="text-xl font-black tracking-tight text-[#222222] uppercase">FusionAutoLockBox</h1>
+						<div className="flex items-center justify-center gap-2">
+							<div className="h-7 w-7 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center shrink-0">
+								<Lock size={13} className="text-[#0B0C0E]" strokeWidth={2.5} />
+							</div>
+							<h1 className="text-lg font-black tracking-tight text-[#222222]">
+								Fusion <span className="text-emerald-600">Auto LockBox</span>
+							</h1>
+						</div>
 					</div>
 
 					{IS_LOCAL_DEV ? <DevBypassLoginForm /> : <AzureSignInScreen />}

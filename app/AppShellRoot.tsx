@@ -7,6 +7,7 @@ import {
 	History,
 	Home,
 	Landmark,
+	Lock,
 	LogOut,
 	Mail,
 	Menu,
@@ -187,15 +188,26 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
 					{/* "Cash Apply" title on the left; the Zensar logo is centered
 					     in the header independently (see below) rather than grouped
-					     here, matching zensar.com's own centered-wordmark layout. */}
-					<div className="leading-tight animate-title-in">
-						<div className="text-lg font-black uppercase tracking-tight whitespace-nowrap">
-							FusionAutoLockBox
+					     here, matching zensar.com's own centered-wordmark layout.
+					     PATCH: title switched from the jammed all-caps
+					     "FUSIONAUTOLOCKBOX" to a mixed-case "Fusion" + "AutoLockBox"
+					     wordmark (the capitals inside "AutoLockBox" read as natural
+					     word breaks) with the second half in the app's emerald accent,
+					     plus a small lock badge — same treatment as the login screen,
+					     just sized for the header. */}
+					<div className="leading-tight animate-title-in flex items-center gap-2">
+						<div className="h-7 w-7 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center shrink-0">
+							<Lock size={13} className="text-[#0B0C0E]" strokeWidth={2.5} />
 						</div>
-						{/* Shortened to roughly match "Cash Apply"'s width — was a much
-						     longer "From bank statement to Fusion - in seconds" line. */}
-						<div className="text-[9px] text-white/70 font-black uppercase tracking-widest flex items-center gap-1 whitespace-nowrap">
-							Bank statement To Fusion in seconds<Zap size={10} className="fill-current" />
+						<div>
+							<div className="text-lg font-black tracking-tight whitespace-nowrap">
+								Fusion <span className="text-emerald-400">Auto LockBox</span>
+							</div>
+							{/* Shortened to roughly match "Cash Apply"'s width — was a much
+							     longer "From bank statement to Fusion - in seconds" line. */}
+							<div className="text-[9px] text-white/70 font-black uppercase tracking-widest flex items-center gap-1 whitespace-nowrap">
+								Bank statement To Fusion in seconds<Zap size={10} className="fill-current" />
+							</div>
 						</div>
 					</div>
 				</div>
