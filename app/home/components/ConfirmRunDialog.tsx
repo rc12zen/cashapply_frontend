@@ -213,7 +213,14 @@ function AccountRow({ account: g }: { account: PreflightAccount }) {
         {g.business_unit && g.ou_number ? (
           <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-1 rounded-xs shrink-0">
             <Building2 size={10} className="text-indigo-400" />
-            {g.business_unit} <span className="text-indigo-400 font-mono normal-case">(OU {g.ou_number})</span>
+            {/* The Oracle "BusinessUnit" string, verbatim -- NAME(ou), the exact
+                value fusion_client.py sends and Oracle exact-matches. Rendered
+                font-mono with normal-case on purpose: the badge's `uppercase`
+                would show a case-folded version of a string where case is
+                load-bearing, which is the opposite of the point. Same
+                presentation as the "Oracle BusinessUnit String" column on the
+                Accounts & OUs page. */}
+            <span className="font-mono normal-case">{g.business_unit}({g.ou_number})</span>
           </span>
         ) : (
           <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-300 px-2 py-1 rounded-xs shrink-0">
@@ -297,7 +304,11 @@ function AccountRow({ account: g }: { account: PreflightAccount }) {
       {g.additional_business_units.length > 0 && (
         <div className="text-[10px] text-gray-500">
           <span className="font-black uppercase tracking-wider text-gray-400">Also posts for: </span>
-          {g.additional_business_units.map((o) => `${o.ou_name} (OU ${o.ou_number})`).join(", ")}
+          {/* Same Oracle NAME(ou) form as the primary badge above -- these are
+              equally real posting targets, so they read identically. */}
+          <span className="font-mono">
+            {g.additional_business_units.map((o) => `${o.ou_name}(${o.ou_number})`).join(", ")}
+          </span>
         </div>
       )}
     </div>
