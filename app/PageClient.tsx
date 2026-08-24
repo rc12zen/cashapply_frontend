@@ -232,7 +232,7 @@ export default function LoginScreen() {
 						className="object-contain h-16 w-auto mx-auto mb-8"
 					/>
 					<h1 className="text-3xl font-black tracking-tight text-white uppercase">
-						Cash Apply
+						FusionAutoLockBox
 					</h1>
 					<p className="text-sm text-white/60 font-medium max-w-[320px] mx-auto mt-3 leading-relaxed">
 						From bank statement to Fusion, reconciled in seconds.
@@ -264,7 +264,7 @@ export default function LoginScreen() {
 							height={91}
 							className="object-contain h-10 w-auto mx-auto mb-4 invert"
 						/>
-						<h1 className="text-xl font-black tracking-tight text-[#222222] uppercase">Cash Apply</h1>
+						<h1 className="text-xl font-black tracking-tight text-[#222222] uppercase">FusionAutoLockBox</h1>
 					</div>
 
 					{IS_LOCAL_DEV ? <DevBypassLoginForm /> : <AzureSignInScreen />}

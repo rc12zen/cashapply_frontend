@@ -23,7 +23,7 @@ import {deleteFile,
   getAgingHistory, getAgingStatus, getAiStatus, getFiles, getIngestStatus, getRunHistory,
   getPendingByAccount, getMe, getRunPreflight,
   getStatus, reingestStatement, selectAgingSource, startRun,
-  uploadStatement,
+  uploadStatement, checkAgingWatchFolder,
 } from "@/lib/api";
 import { isViewerRoles } from "@/lib/permissions";
 import { detectForFile } from "@/lib/configBuilderApi";
@@ -109,7 +109,7 @@ export default function Dashboard() {
   const [runStatus, setRunStatus]     = useState({ status: "idle", message: "", progress_current: 0, started_at: null as string | null });
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const runStartedLocalRef = useRef<number | null>(null); // wall-clock ms when THIS browser session first saw "running"
-  const [agingStatus, setAgingStatus] = useState({ loaded: false, row_count: 0, filename: null });
+  const [agingStatus, setAgingStatus] = useState<{ loaded: boolean; row_count: number; filename: string | null; loaded_at?: string | null }>({ loaded: false, row_count: 0, filename: null, loaded_at: null });
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState("");
   // Distinct from `error` — this one drives its own unmissable banner (see
@@ -122,6 +122,10 @@ export default function Dashboard() {
   // SourceFile rows are never hard-deleted, so this is a permanent list).
   const [agingHistory, setAgingHistory]           = useState<{ id: number; filename: string; uploaded_at: string | null; is_active: boolean }[]>([]);
   const [agingSwitching, setAgingSwitching]       = useState(false);
+  // PATCH: manual "Check Now" action on the Aging Report card — re-scans
+  // AGING_WATCH_FOLDER by file mtime immediately rather than waiting for
+  // the next background poll tick.
+  const [checkingAgingWatchFolder, setCheckingAgingWatchFolder] = useState(false);
 
   const [agingUploading, setAgingUploading]         = useState(false);  // kept for compat — unused
   const [statementUploading, setStatementUploading] = useState(false);
@@ -367,6 +371,29 @@ export default function Dashboard() {
       setError(getErrorMessage(e, "Failed to load that aging snapshot."));
     }
     setAgingSwitching(false);
+  };
+
+  // PATCH: manual "Check Now" — re-scans AGING_WATCH_FOLDER by file mtime
+  // right away instead of waiting for the next background poll tick. Also
+  // now correctly picks up a re-dropped file with the SAME filename but a
+  // newer mtime (e.g. the Oracle SFTP puller refreshing the same
+  // xxzen_aging_report_excel.xls path) — see aging/watcher.py's check_now().
+  const handleCheckAgingWatchFolder = async () => {
+    setCheckingAgingWatchFolder(true);
+    setError("");
+    try {
+      const res = await checkAgingWatchFolder();
+      setAgingStatus(res.data.status);
+      await fetchAgingHistory();
+      if (res.data.reloaded?.length) {
+        showSuccess(`Loaded newer aging file: ${res.data.reloaded.join(", ")}.`);
+      } else {
+        showSuccess("Watch folder checked — no newer aging file found.");
+      }
+    } catch (e: any) {
+      setError(getErrorMessage(e, "Failed to check the aging watch folder."));
+    }
+    setCheckingAgingWatchFolder(false);
   };
 
   // BUGFIX: this used to only ever be populated as a side effect of
@@ -974,6 +1001,8 @@ export default function Dashboard() {
 						agingHistory={agingHistory}
 						agingSwitching={agingSwitching}
 						onSelectAgingSource={handleSelectAgingSource}
+						onCheckWatchFolder={handleCheckAgingWatchFolder}
+						checkingWatchFolder={checkingAgingWatchFolder}
 					/>
 					<AccountStatementsCard
 						statementInputRef={statementInputRef}

@@ -190,7 +190,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 					     here, matching zensar.com's own centered-wordmark layout. */}
 					<div className="leading-tight animate-title-in">
 						<div className="text-lg font-black uppercase tracking-tight whitespace-nowrap">
-							Cash Apply
+							FusionAutoLockBox
 						</div>
 						{/* Shortened to roughly match "Cash Apply"'s width — was a much
 						     longer "From bank statement to Fusion - in seconds" line. */}
