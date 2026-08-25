@@ -640,6 +640,11 @@ export const getAgingStatus      = ()                      => API.get("/api/conf
 // to bypass that (wired to a "Recheck" button).
 export const getAiStatus         = (force = false)          => API.get("/api/config/ai-status", { params: force ? { force: true } : {} });
 export const refreshAging        = ()                      => API.post("/api/config/refresh-aging");
+// Manual "Check Now" action on the Aging Report card — re-scans
+// AGING_WATCH_FOLDER by file modification time immediately, instead of
+// waiting for the next background poll tick. See bff/config_routes.py's
+// /check-aging-watch-folder and aging/watcher.py's check_now().
+export const checkAgingWatchFolder = ()                    => API.post("/api/config/check-aging-watch-folder");
 
 /**
  * Move the current aging report to archive (does NOT delete — preserved for audit).

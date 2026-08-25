@@ -1,26 +1,27 @@
 "use client";
-import { AlertTriangle, CheckCircle2, ChevronDown, Layers, RefreshCw } from "lucide-react";
-
-export interface AgingHistoryEntry {
-  id: number;
-  filename: string;
-  uploaded_at: string | null;
-  is_active: boolean;
-}
-
+import { AlertTriangle, CheckCircle2, Layers } from "lucide-react";
 interface AgingReportCardProps {
-  agingStatus: { loaded: boolean; row_count: number; filename: string | null };
-  agingHistory: AgingHistoryEntry[];
-  agingSwitching: boolean;
-  onSelectAgingSource: (sourceFileId: number) => void;
+  agingStatus: { loaded: boolean; row_count: number; filename: string | null; loaded_at?: string | null };
 }
-
 /**
  * Aging Report card — shows the auto-loaded (SFTP watch-folder) snapshot
- * status and lets the user pick an older aging source file on demand.
+ * status.
+ *
+ * PATCH: the manual "Check Now" watch-folder re-scan action (and its
+ * onCheckWatchFolder/checkingWatchFolder props) has been removed entirely.
+ * The card is now read-only status display — the backend's background poll
+ * (AGING_POLL_INTERVAL_SECONDS) is the only way a newer aging file gets
+ * picked up.
+ *
+ * PATCH: the "pick a past aging snapshot to run against" history dropdown
+ * (and its onSelectAgingSource action) has been removed entirely. Analysis
+ * must always run against whichever aging file is currently active/latest
+ * — there is deliberately no way from this page to select an older one.
+ * See app/home/PageClient.tsx for the corresponding removal of
+ * fetchAgingHistory / handleSelectAgingSource / agingHistory state.
  */
 export default function AgingReportCard({
-  agingStatus, agingHistory, agingSwitching, onSelectAgingSource,
+  agingStatus,
 }: AgingReportCardProps) {
   return (
     <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm flex flex-col min-h-[140px]">
@@ -32,13 +33,18 @@ export default function AgingReportCard({
           Auto-loaded from the Oracle SFTP (<code className="bg-gray-100 px-1 rounded text-[10px]">AGING_WATCH_FOLDER</code>).
         </p>
       </div>
-      <div className="mt-3 pt-2 border-t border-gray-100 space-y-2">
+      <div className="mt-3 pt-2 border-t border-gray-100">
         {agingStatus.loaded && agingStatus.filename ? (
           <div className="flex w-full box-border items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3.5 py-2.5 h-[62px]">
             <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
             <div className="min-w-0">
               <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">Loaded</span>
               <p className="font-mono font-bold text-primary text-[10px] truncate mt-0.5">{agingStatus.filename}</p>
+              {agingStatus.loaded_at && (
+                <p className="text-[9px] text-emerald-700/70 mt-0.5">
+                  Loaded {new Date(agingStatus.loaded_at).toLocaleString()}
+                </p>
+              )}
             </div>
           </div>
         ) : (
@@ -48,34 +54,6 @@ export default function AgingReportCard({
               <span className="text-[10px] font-black uppercase tracking-wider text-amber-700">Not Loaded</span>
               <p className="text-[10px] text-gray-500 mt-0.5">Drop an aging file in the watch folder.</p>
             </div>
-          </div>
-        )}
-
-        {/* PATCH: choose from past aging report source files — available even
-            while a snapshot is currently loaded, so the user can go back to an
-            older one on demand instead of only ever using the newest upload. */}
-        {agingHistory.length > 0 && (
-          <div className="relative">
-            <select
-              value={agingHistory.find((h) => h.is_active)?.id ?? ""}
-              onChange={(e) => {
-                const id = Number(e.target.value);
-                if (id) onSelectAgingSource(id);
-              }}
-              disabled={agingSwitching}
-              className="w-full bg-gray-50 border border-gray-200 text-[10px] font-bold text-primary pl-3 pr-7 py-2.5 rounded-xl appearance-none focus:outline-none focus:border-[#222222] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {agingHistory.map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.filename}{h.uploaded_at ? ` — ${new Date(h.uploaded_at).toLocaleDateString()}` : ""}{h.is_active ? " (active)" : ""}
-                </option>
-              ))}
-            </select>
-            {agingSwitching ? (
-              <RefreshCw size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 animate-spin pointer-events-none" />
-            ) : (
-              <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            )}
           </div>
         )}
       </div>

@@ -15,14 +15,21 @@
  *     setError() (same pattern as every other handler in this file) and
  *     shows a success toast on the happy path, matching
  *     handleStatementUpload's shape.
+ *
+ *   - PATCH: removed the Aging Report card's manual "Check Now" action.
+ *     checkAgingWatchFolder, the checkingAgingWatchFolder state, and
+ *     handleCheckAgingWatchFolder() are gone — AgingReportCard now only
+ *     renders the current aging status. Picking up a newer aging file
+ *     relies solely on the backend's background poll
+ *     (AGING_POLL_INTERVAL_SECONDS).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import {deleteFile,
-  getAgingHistory, getAgingStatus, getAiStatus, getFiles, getIngestStatus, getRunHistory,
+  getAgingStatus, getAiStatus, getFiles, getIngestStatus, getRunHistory,
   getPendingByAccount, getMe, getRunPreflight,
-  getStatus, reingestStatement, selectAgingSource, startRun,
+  getStatus, reingestStatement, startRun,
   uploadStatement,
 } from "@/lib/api";
 import { isViewerRoles } from "@/lib/permissions";
@@ -31,21 +38,18 @@ import { getErrorMessage } from "@/lib/errorMessage";
 import ConfigBuilderWizard from "@/components/ConfigBuilderWizard";
 import AiStatusBadge, { type AiStatus } from "./components/AiStatusBadge";
 import ConfigResolveDialog from "@/components/ConfigResolveDialog";
-
 import WelcomeHero from "./components/WelcomeHero";
 import StatusBanners from "./components/StatusBanners";
 import AgingReportCard from "./components/AgingReportCard";
 import AccountStatementsCard from "./components/AccountStatementsCard";
 import RunControlBar from "./components/RunControlBar";
 import ConfirmRunDialog from "./components/ConfirmRunDialog";
-
 import {
   type ConfigCandidate, type FileInfo, type AccountGroup, type StatementGroup,
   type RunPreflight,
   isAccountRunnable,
 } from "./types";
 import { formatGreetingName } from "@/lib/formatName";
-
 // Human labels for the raw provider tokens the backend reports
 // (extraction/ai_providers.py's AI_PROVIDER values), so gate messages read
 // "Azure OpenAI" rather than "azure_openai".
@@ -56,7 +60,6 @@ const AI_PROVIDER_LABELS: Record<string, string> = {
 };
 const prettyProvider = (p?: string | null): string =>
   p ? AI_PROVIDER_LABELS[p] ?? p : "the AI provider";
-
 /**
  * The single user-facing reason WHY the AI gate is blocking upload + analysis,
  * derived from the status the backend returns (GET /api/config/ai-status →
@@ -81,7 +84,6 @@ function aiGateReason(status: AiStatus | null): string {
   // name), which is exactly the specific reason to surface.
   return `Upload and analysis are paused — ${status.message || `${prettyProvider(status.provider)} is configured but not reachable right now. Contact an administrator.`}`;
 }
-
 /**
  * Whether the AI gate PASSES (upload + analyse allowed). True when AI is
  * intentionally turned OFF via .env (enabled === false → regex-only local mode,
@@ -92,7 +94,6 @@ function aiGateReason(status: AiStatus | null): string {
 function aiGatePasses(status: AiStatus | null): boolean {
   return !!status && (status.enabled === false || status.active === true);
 }
-
 export default function Dashboard() {
   const router = useRouter();
   const [files, setFiles]             = useState<FileInfo[]>([]);
@@ -109,24 +110,16 @@ export default function Dashboard() {
   const [runStatus, setRunStatus]     = useState({ status: "idle", message: "", progress_current: 0, started_at: null as string | null });
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const runStartedLocalRef = useRef<number | null>(null); // wall-clock ms when THIS browser session first saw "running"
-  const [agingStatus, setAgingStatus] = useState({ loaded: false, row_count: 0, filename: null });
+  const [agingStatus, setAgingStatus] = useState<{ loaded: boolean; row_count: number; filename: string | null; loaded_at?: string | null }>({ loaded: false, row_count: 0, filename: null, loaded_at: null });
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState("");
   // Distinct from `error` — this one drives its own unmissable banner (see
   // the top of the render), not the generic dismissible error list, so
   // "the backend itself is down" is never just one line among several.
   const [backendUnreachable, setBackendUnreachable] = useState(false);
-
-  // PATCH: past aging report source files — lets the user pick an older
-  // snapshot even while a current one is already loaded (kind="aging_report"
-  // SourceFile rows are never hard-deleted, so this is a permanent list).
-  const [agingHistory, setAgingHistory]           = useState<{ id: number; filename: string; uploaded_at: string | null; is_active: boolean }[]>([]);
-  const [agingSwitching, setAgingSwitching]       = useState(false);
-
   const [agingUploading, setAgingUploading]         = useState(false);  // kept for compat — unused
   const [statementUploading, setStatementUploading] = useState(false);
   const statementInputRef = useRef<HTMLInputElement>(null);
-
   // ── Duplicate-upload banner (backend design doc §2.1) ──────────────────────
   // Set when uploadStatement() returns { duplicate: true, ... } — surfaced as
   // a dismissable, actionable banner (not a toast).
@@ -140,12 +133,10 @@ export default function Dashboard() {
     history_link: string; existing_run_id: number | null;
     owned_by_current_user: boolean;
   } | null>(null);
-
   // Detection results per file + wizard/resolve state
   const [detectionInfo, setDetectionInfo] = useState<Record<string, { config_key: string | null; warning: string | null; ambiguous?: boolean }>>({});
   const [wizardFile, setWizardFile]       = useState<string | null>(null);
   const [resolveState, setResolveState]   = useState<{ filename: string; candidates: ConfigCandidate[]; mode: "ambiguous" | "reconfigure" } | null>(null);
-
   const [userDisplayName, setUserDisplayName] = useState("Admin User");
   // Viewer holds no permissions at all -- this page renders ONLY the
   // Welcome hero for them (see the early return near the bottom of this
@@ -163,7 +154,6 @@ export default function Dashboard() {
   // seconds"; this is informational and worth leaving up until dismissed.
   const [uploadNotice, setUploadNotice] = useState("");
   const [configNeededNotice, setConfigNeededNotice] = useState("");
-
   // ── AI availability gate ────────────────────────────────────────────────
   // Narrative extraction (Layer 2B — extraction/ai_providers.py) is what turns
   // raw bank rows into identifiable detail. Business rule: if AI isn't actually
@@ -187,7 +177,6 @@ export default function Dashboard() {
   const aiReady = aiGatePasses(aiStatus);
   // Reason to show wherever the gate blocks (only meaningful when !aiReady).
   const aiReason = aiReady ? "" : aiGateReason(aiStatus);
-
   const fetchAiStatus = useCallback(async (force: boolean): Promise<AiStatus | null> => {
     force ? setAiRechecking(true) : setAiLoading(true);
     try {
@@ -202,13 +191,11 @@ export default function Dashboard() {
       setAiRechecking(false);
     }
   }, []);
-
   // PATCH: completion banner now reports the new taxonomy too.
   const [runCompletionSummary, setRunCompletionSummary] = useState<{
     totalRows: number; identified: number; unidentified: number; readyForOracle: number;
   } | null>(null);
   const prevRunStatus = useRef<string>("idle");
-
   // PATCH: filenames that were part of the most recently COMPLETED run.
   // Used to stop the control bar from inviting an immediate re-run against
   // the exact same statement(s) — see filesAlreadyAnalyzed below.
@@ -233,7 +220,6 @@ export default function Dashboard() {
   const [preflight, setPreflight] = useState<RunPreflight | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightError, setPreflightError] = useState("");
-
   // Fetch (or re-fetch, via the dialog's Retry) the preflight review. On
   // failure the dialog shows the error and keeps Start disabled -- failing
   // closed, since starting an irreversible run on an unverified picture is
@@ -250,7 +236,6 @@ export default function Dashboard() {
     }
     setPreflightLoading(false);
   }, []);
-
   const fetchFiles = useCallback(async () => {
     try {
       const res = await getFiles();
@@ -274,7 +259,6 @@ export default function Dashboard() {
       if (!e?.response) setBackendUnreachable(true);
     }
   }, []);
-
   const fetchPendingByAccount = useCallback(async () => {
     try {
       const res = await getPendingByAccount();
@@ -302,13 +286,11 @@ export default function Dashboard() {
       // non-fatal — falls back to "everything included" behavior below
     }
   }, []);
-
   const fetchStatus = useCallback(async () => {
     try {
       const res       = await getStatus();
       const newStatus = res.data.status;
       setRunStatus(res.data);
-
       if (newStatus === "completed" && prevRunStatus.current !== "completed") {
         try {
           const histRes = await getRunHistory(1, 1);
@@ -343,32 +325,6 @@ export default function Dashboard() {
       prevRunStatus.current = newStatus;
     } catch {}
   }, [fetchFiles, fetchPendingByAccount]);
-
-  const fetchAgingHistory = useCallback(async () => {
-    try {
-      const res = await getAgingHistory();
-      setAgingHistory(res.data.items || []);
-      setBackendUnreachable(false);
-    } catch (e: any) {
-      setError((prev) => prev || getErrorMessage(e, "Could not load aging report history."));
-      if (!e?.response) setBackendUnreachable(true);
-    }
-  }, []);
-
-  const handleSelectAgingSource = async (sourceFileId: number) => {
-    setAgingSwitching(true);
-    setError("");
-    try {
-      const res = await selectAgingSource(sourceFileId);
-      setAgingStatus({ loaded: res.data.loaded, row_count: res.data.row_count, filename: res.data.filename });
-      await fetchAgingHistory();
-      showSuccess(`Loaded aging snapshot "${res.data.filename}".`);
-    } catch (e: any) {
-      setError(getErrorMessage(e, "Failed to load that aging snapshot."));
-    }
-    setAgingSwitching(false);
-  };
-
   // BUGFIX: this used to only ever be populated as a side effect of
   // doFetchMetrics() (which fetched it alongside /results/metrics). When
   // metrics moved to the Overview page, doFetchMetrics — and this call
@@ -391,11 +347,9 @@ export default function Dashboard() {
       if (!e?.response) setBackendUnreachable(true);
     }
   }, []);
-
   useEffect(() => {
     const match = document.cookie.match(/(?:^|; )login_user_email_stub=([^;]*)/);
     if (match?.[1]) setUserDisplayName(formatGreetingName(decodeURIComponent(match[1]).split("@")[0]));
-
     (async () => {
       // Resolve the role FIRST -- a Viewer holds no permissions at all, so
       // every one of the calls below (all now gated on "run:view" or
@@ -418,10 +372,8 @@ export default function Dashboard() {
       }
       setIsViewer(viewer);
       if (viewer) return;
-
       fetchFiles();
       fetchPendingByAccount();
-      fetchAgingHistory();
       fetchAgingStatus();
       fetchAiStatus(false);   // seed the AI availability gate on load
       // PATCH: seed lastRunFiles from the most recent completed run so a page
@@ -438,13 +390,11 @@ export default function Dashboard() {
   // Mount-only.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
   useEffect(() => {
     if (runStatus.status !== "running") return;
     const interval = setInterval(fetchStatus, 2000);
     return () => clearInterval(interval);
   }, [runStatus.status, fetchStatus]);
-
   // Reconcile the file / account lists with the backend when the tab regains
   // focus. pollIngestStatus only updates a file's badge during its ~2-minute
   // window, then stops — and fetchFiles otherwise runs only on mount / after a
@@ -468,7 +418,6 @@ export default function Dashboard() {
       document.removeEventListener("visibilitychange", resync);
     };
   }, [fetchFiles, fetchPendingByAccount, runStatus.status, isViewer]);
-
   useEffect(() => {
     if (runStatus.status !== "running") {
       setElapsedSeconds(0);
@@ -485,7 +434,6 @@ export default function Dashboard() {
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
   }, [runStatus.status]);
-
   // Success messages are QUEUED and now PERSISTENT — no auto-dismiss timer.
   // Previously each one auto-advanced after SUCCESS_MS, which is why these
   // were disappearing on their own. Now the current message stays up until
@@ -494,7 +442,6 @@ export default function Dashboard() {
   // de-duplicated (so a repeated "…is ready…" can't spam the bar).
   const successQueueRef = useRef<string[]>([]);
   const currentSuccessRef = useRef<string>("");
-
   const advanceSuccessQueue = () => {
     const next = successQueueRef.current.shift();
     if (next === undefined) {
@@ -505,7 +452,6 @@ export default function Dashboard() {
     setSuccessMessage(next);
     currentSuccessRef.current = next;
   };
-
   const showSuccess = (msg: string) => {
     if (!msg) return;
     // De-dupe: skip if it's the message on screen now or already waiting.
@@ -513,7 +459,6 @@ export default function Dashboard() {
     successQueueRef.current.push(msg);
     if (!currentSuccessRef.current) advanceSuccessQueue(); // idle → show now
   };
-
   // PATCH: true when the currently-listed statement files are EXACTLY the
   // same set (regardless of order) as the ones the last completed run
   // already processed — i.e. nothing new has been uploaded since. Drives
@@ -532,7 +477,6 @@ export default function Dashboard() {
     const byName = new Map(files.map((f) => [f.filename, f]));
     const groups: AccountGroup[] = [];
     const represented = new Set<string>();
-
     for (const [key, meta] of Object.entries(pendingByAccount)) {
       const groupFiles = meta.filenames
         .map((n) => byName.get(n))
@@ -553,7 +497,6 @@ export default function Dashboard() {
         last_consumed_run_id: meta.last_consumed_run_id ?? null,
       });
     }
-
     // Safety net for files the account endpoint didn't cover (a failed/stale
     // fetch, or a file still being ingested). Without this a file could vanish
     // from the list entirely, taking its Configure / Add Accounts button with it.
@@ -573,7 +516,6 @@ export default function Dashboard() {
     }
     return [...groups, ...byKey.values()];
   }, [files, pendingByAccount]);
-
   // One entry per uploaded STATEMENT, carrying the accounts its rows belong to.
   // accountGroups stays account-keyed (the run and the confirm dialog need that
   // granularity); this is the file-shaped view the Account Statements list needs
@@ -600,7 +542,6 @@ export default function Dashboard() {
     map.forEach((s) => s.accounts.sort((a, b) => b.pending_row_count - a.pending_row_count));
     return Array.from(map.values());
   }, [files, accountGroups]);
-
   const isAccountSelected = (key: string) => !deselectedAccountKeys.has(key);
   // A statement is selected when its accounts are. They move together (a run
   // takes whole files), so this is one checkbox over all of them.
@@ -633,14 +574,11 @@ export default function Dashboard() {
   // "unconsumed"/"runnable" statements only — an already-analysed file
   // left in the list must block a new upload just as much as a pending one.
   const hasQueuedStatement = statementGroups.length > 0;
-
-
   const filesAlreadyAnalyzed =
     files.length > 0 &&
     lastRunFiles.length === files.length &&
     [...files.map((f) => f.filename)].sort().join("|") ===
       [...lastRunFiles].sort().join("|");
-
   const handleStart = async () => {
     if (!agingStatus.loaded) { setError("Please load aging ledger data first."); return; }
     if (files.length === 0)  { setError("Upload at least one statement file first."); return; }
@@ -695,7 +633,6 @@ export default function Dashboard() {
     setConfirmRun({ filenames: selectedFilenames });
     loadPreflight(selectedFilenames);
   };
-
   const confirmAndStartRun = async () => {
     if (!confirmRun) return;
     // Belt-and-braces: the dialog already disables Start unless preflight
@@ -716,7 +653,6 @@ export default function Dashboard() {
     }
     setLoading(false);
   };
-
   const pollIngestStatus = (sourceFileId: number, filename: string) => {
     // Frontend half of "Upload successful. Processing..." -> "You can now
     // start Analysis." (backend design doc §4). Stops on ready/error or
@@ -775,7 +711,6 @@ export default function Dashboard() {
       if (attempts >= 60) clearInterval(interval);
     }, 2000);
   };
-
   const handleStatementUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     // Reset the input so re-picking the same file later still fires onChange
@@ -803,7 +738,6 @@ export default function Dashboard() {
     try {
       const res = await uploadStatement(file);
       const data = res.data ?? {};
-
       if (data.restored || data.retried) {
         // PATCH (restored): the file you just uploaded matches one that
         // was previously removed (✕) — the backend un-archived it instead
@@ -835,7 +769,6 @@ export default function Dashboard() {
         if (data.source_file_id) pollIngestStatus(data.source_file_id, file.name);
         return;
       }
-
       if (data.duplicate) {
         // Exact-duplicate-file case (backend design doc §2.1) — not an
         // error toast, an actionable banner. existing_run_id tells us
@@ -861,7 +794,6 @@ export default function Dashboard() {
         await fetchPendingByAccount();
         return;
       }
-
       const { detected_bank_config, warning, ambiguous, candidates, source_file_id } = data;
       setDetectionInfo((prev) => ({
         ...prev,
@@ -885,7 +817,6 @@ export default function Dashboard() {
       if (statementInputRef.current) statementInputRef.current.value = "";
     }
   };
-
   const openResolveForFile = async (filename: string, mode: "ambiguous" | "reconfigure") => {
     try {
       const res = await detectForFile(filename);
@@ -895,7 +826,6 @@ export default function Dashboard() {
       setWizardFile(filename);
     }
   };
-
   const handleRemoveFile = async (filename: string) => {
     // FIX: previously `try { ... } catch {}` — any failure (permission
     // error, network issue, backend exception) was silently swallowed, so
@@ -917,11 +847,8 @@ export default function Dashboard() {
       );
     }
   };
-
   const isRunning = runStatus.status === "running";
-
   const fmtElapsed = (s: number) => `${Math.floor(s / 60).toString().padStart(2,"0")}:${(s % 60).toString().padStart(2,"0")}`;
-
   // Viewer: Home is a working dashboard for people who already have
   // access -- a Viewer never actually renders it. app/layout.tsx's route
   // guard normally redirects them before this component even mounts;
@@ -931,7 +858,6 @@ export default function Dashboard() {
     router.replace("/welcome");
     return null;
   }
-
   return (
 			<div className="max-w-5xl mx-auto space-y-5">
 				{backendUnreachable && (
@@ -949,7 +875,6 @@ export default function Dashboard() {
 					</div>
 				)}
 				<WelcomeHero userDisplayName={userDisplayName} />
-
 				<StatusBanners
 					error={error} setError={setError}
 					duplicateUploadInfo={duplicateUploadInfo} setDuplicateUploadInfo={setDuplicateUploadInfo}
@@ -966,14 +891,10 @@ export default function Dashboard() {
 				    Home, so a durable, always-reachable-by-run_id location (any past
 				    run, any time) is the right one, not a second copy tied to
 				    whatever's freshest in this tab's memory. */}
-
 				{/* UPLOADS */}
 				<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 					<AgingReportCard
 						agingStatus={agingStatus}
-						agingHistory={agingHistory}
-						agingSwitching={agingSwitching}
-						onSelectAgingSource={handleSelectAgingSource}
 					/>
 					<AccountStatementsCard
 						statementInputRef={statementInputRef}
@@ -991,7 +912,6 @@ export default function Dashboard() {
 						onRemoveFile={handleRemoveFile}
 					/>
 				</div>
-
 				{/* CONTROL BAR CARD */}
 				<div className="flex items-center justify-end -mb-1">
 					<AiStatusBadge
@@ -1016,7 +936,6 @@ export default function Dashboard() {
 					fmtElapsed={fmtElapsed}
 					onStart={handleStart}
 				/>
-
 				{/* Confirm-before-run dialog */}
 				{confirmRun && (
 					<ConfirmRunDialog
@@ -1029,7 +948,6 @@ export default function Dashboard() {
 						onRetryPreflight={() => loadPreflight(confirmRun.filenames)}
 					/>
 				)}
-
 				{/* Config Resolve Dialog */}
 				{resolveState && (
 					<ConfigResolveDialog
@@ -1044,7 +962,6 @@ export default function Dashboard() {
 						}}
 					/>
 				)}
-
 				{/* Config Builder Wizard */}
 				{wizardFile && (
 					<ConfigBuilderWizard
