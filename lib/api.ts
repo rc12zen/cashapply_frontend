@@ -519,6 +519,11 @@ export const parkOverpayment    = (id: number, disposition: string, comment?: st
 // the row to its own "Discarded" state without ever creating one.
 export const markEligible        = (id: number)                   => API.post(`/api/hitl/mark-eligible/${id}`, {});
 export const discardEntry        = (id: number, comment?: string) => API.post(`/api/hitl/discard/${id}`, { comment });
+// Undo a Discard — back to Unidentified with no eligibility decision recorded,
+// so Mark Eligible and Discard are both offered again. Safe because a discarded
+// row has no Oracle receipt to reverse; see hitl/service.py's
+// restore_discarded_row().
+export const restoreDiscarded    = (id: number, comment?: string) => API.post(`/api/hitl/restore-discarded/${id}`, { comment });
 // Needs Distribution rows only — see hitl/service.py's
 // override_settlement_as_customer_payment(). Moves the row out of the
 // broker/card/cheque bucket into the standard Manual Invoice Mapping flow.
