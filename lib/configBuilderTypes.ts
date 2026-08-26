@@ -175,6 +175,19 @@ export interface SaveRecipePayload {
   currency?: string;
   ou_number: string;
   business_unit: string;
+  // Business Units BEYOND the primary one, for a bank account that receives
+  // money for more than one BU.
+  //
+  // Each carries the same three fields the primary OU does, so one that has
+  // never been onboarded is created here — named and given its ledger currency
+  // in the wizard's new-OU step, exactly like a new primary OU. functional
+  // currency is required only when the OU is genuinely new.
+  //
+  // An empty list means "leave whatever is already attached" on the backend,
+  // NOT "remove them all" — so a routine re-save (new format recipe, corrected
+  // column mapping) can never silently strip a multi-BU account back to one.
+  // Removing an additional BU stays the Accounts & OU's page's job.
+  additional_ous?: { ou_number: string; business_unit: string; functional_currency?: string }[];
   // Ledger/functional currency for this OU — only used if ou_number is
   // genuinely new (see backend's builder_save); falls back to `currency`
   // if omitted. See db config_builder_routes.py's SaveRecipeRequest.

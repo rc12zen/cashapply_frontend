@@ -254,6 +254,11 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const [bank, setBank]                   = useState("");
   const [currency, setCurrency]           = useState("");
   const [ouNumber, setOuNumber]           = useState("");
+  // Business Units BEYOND the primary, for an account that receives money
+  // for more than one BU. Single-account path only -- the multi-account
+  // fan-out still assigns one OU per discovered account (see StepSave).
+  // These must already exist; create one on the Accounts & OU's page.
+  const [additionalOus, setAdditionalOus] = useState<string[]>([]);
   // NOTE: there is deliberately no `businessUnit` state. The Business Unit name
   // belongs to the ORGANIZATION UNIT, not to a config or an account — it comes
   // from the OU record when the OU exists, and from newOuDetails when it doesn't
@@ -578,6 +583,16 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         currency: currency.trim() || undefined,
         ou_number: (multi ? assignments[accountNumber]?.ou_number ?? "" : ouNumber).trim(),
         business_unit: resolveBU(multi ? assignments[accountNumber]?.ou_number : ouNumber),
+        // Extra BUs for a shared account, each carrying the same three
+        // fields the primary OU does -- so one that has never been onboarded
+        // can be created here rather than having to exist first. Empty means
+        // "leave whatever is already attached" on the backend, so a routine
+        // re-save never silently strips a multi-BU account back to one.
+        additional_ous: multi ? [] : additionalOus.map((ou) => ({
+          ou_number: ou,
+          business_unit: resolveBU(ou),
+          functional_currency: resolveFC(ou) || undefined,
+        })),
         functional_currency: resolveFC(multi ? assignments[accountNumber]?.ou_number : ouNumber) || undefined,
         override_account_validation: overrideAccount,
         created_by: readLoginStub(),
@@ -672,9 +687,17 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   // is required exactly when this is non-empty, and irrelevant otherwise.
   const isNewOU = (ou: string | undefined | null): boolean =>
     !!ou && !availableOUs.find((o) => o.ou_number === ou)?.business_unit;
-  const newOUNumbers = isMultiAccount
-    ? Array.from(new Set(validFoundAccounts.map((a) => assignments[a]?.ou_number).filter(isNewOU) as string[]))
-    : (isNewOU(ouNumber) ? [ouNumber] : []);
+  const newOUNumbers = Array.from(new Set([
+    ...(isMultiAccount
+      ? (validFoundAccounts.map((a) => assignments[a]?.ou_number).filter(isNewOU) as string[])
+      : (isNewOU(ouNumber) ? [ouNumber] : [])),
+    // Additional Business Units are onboarded on exactly the same terms as the
+    // primary: pick one that has never been onboarded and step 3 asks for its
+    // name and ledger currency too. Without this, a new OU chosen as an
+    // ADDITIONAL BU would reach the backend with no currency and be rejected.
+    // Multi-account fan-out has no additional-BU picker, hence single only.
+    ...(isMultiAccount ? [] : additionalOus.filter(isNewOU)),
+  ]));
 
   // Business Unit for an OU: from the OU record when it's already onboarded,
   // otherwise from what the user typed for that NEW OU. Single source of truth,
@@ -983,6 +1006,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   displayName, setDisplayName,
                   bank, setBank, currency, setCurrency,
                   ouNumber, setOuNumber,
+                  additionalOus, setAdditionalOus,
                   accountNumber, existingFormats,
                   extension: previewData?.extension ?? "xlsx",
                   saving, saveError,
@@ -3021,6 +3045,7 @@ function StepSave({
   displayName, setDisplayName,
   bank, setBank, currency, setCurrency,
   ouNumber, setOuNumber,
+  additionalOus, setAdditionalOus,
   accountNumber, existingFormats,
   extension,
   saving, saveError,
@@ -3034,6 +3059,7 @@ function StepSave({
   bank: string; setBank: (v: string) => void;
   currency: string; setCurrency: (v: string) => void;
   ouNumber: string; setOuNumber: (v: string) => void;
+  additionalOus: string[]; setAdditionalOus: (v: string[]) => void;
   accountNumber: string;
   existingFormats: Record<string, string[]>;
   extension: string;
@@ -3209,6 +3235,79 @@ function StepSave({
           </div>
         </div>
       </div>
+
+      {/* Additional Business Units — for one account that receives money for
+          more than one BU. Previously this could only be set AFTER onboarding,
+          from the Accounts & OU's page, which made a multi-BU account a
+          two-screen job. Only existing OUs are offered: an additional BU is by
+          definition one this statement is not the source for, so there is
+          nothing here to infer a name or ledger currency from. Create it on the
+          Accounts & OU's page first, then it appears in this list. */}
+      {ouNumber && (
+        <div className="space-y-1.5 mt-4">
+          <label className={`block ${SECTION_LABEL}`}>
+            Additional Business Units
+            <span className="text-gray-400 font-normal normal-case"> (optional)</span>
+          </label>
+          <p className="text-[10px] text-gray-500 leading-snug">
+            Other Business Units this account also receives money for. Picked the same way
+            as the Organization Unit above — including one that has never been onboarded,
+            which you name in step 3 alongside the primary.
+          </p>
+
+          {/* Selected ones, each removable. Rendered as rows rather than chips
+              so a new OU can carry the same "(new — name it in step 3)" note the
+              primary field uses. */}
+          {additionalOus.length > 0 && (
+            <div className="border border-gray-200 rounded-sm divide-y divide-gray-100">
+              {additionalOus.map((ou) => (
+                <div key={ou} className="flex items-center gap-2 px-3 py-1.5 text-[11px]">
+                  <span className="font-mono font-bold text-primary">{ou}</span>
+                  <span className="text-gray-500 truncate">
+                    {resolveBU(ou) || (
+                      <span className="italic text-amber-600">new OU — name it in step 3</span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAdditionalOus(additionalOus.filter((n) => n !== ou))}
+                    aria-label={`Remove ${ou}`}
+                    className="ml-auto text-[10px] font-black uppercase tracking-wider text-gray-400
+                               hover:text-red-600 cursor-pointer shrink-0"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Same control as the Organization Unit select above: pick from every
+              known OU, including aging-report OUs not yet onboarded. Resets to
+              the placeholder after each pick so it reads as "add another". */}
+          <select
+            value=""
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v && !additionalOus.includes(v)) setAdditionalOus([...additionalOus, v]);
+            }}
+            disabled={ousLoading}
+            className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 bg-white
+                       focus:outline-none focus:border-[#222222] disabled:opacity-50"
+          >
+            <option value="">
+              {additionalOus.length ? "Add another Business Unit…" : "Add a Business Unit…"}
+            </option>
+            {availableOUs
+              .filter((o) => o.ou_number !== ouNumber && !additionalOus.includes(o.ou_number))
+              .map((o) => (
+                <option key={o.ou_number} value={o.ou_number}>
+                  {o.ou_number}{o.business_unit ? ` — ${o.business_unit}` : " — (new, not yet onboarded)"}
+                </option>
+              ))}
+          </select>
+        </div>
+      )}
       </Section>
       )}
 
