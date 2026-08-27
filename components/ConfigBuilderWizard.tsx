@@ -85,6 +85,47 @@ const BANK_KEYWORDS = [
 // sub-header label like "Cr" is never mistaken for data), the cell text for a
 // cell, the literal for fixed. Feeds the live value-sanity checks, which are
 // majority-based so one odd value can't trigger a false warning.
+/**
+ * The account numbers an account_number mapping is AMBIGUOUS between — ONE
+ * source value naming several accounts, exactly one of which is this config's
+ * identity. Empty when the mapping is unambiguous. Two shapes qualify:
+ *   "41678876 & 41678884"  — a main + sub-account header cell
+ *   "401310-41678876"      — HSBC UK's sort code + account number
+ *
+ * A CELL is ambiguous whenever it splits into several. A COLUMN is ambiguous
+ * only when EVERY row splits into several AND they all name the SAME set — one
+ * cell shape repeated down the file. A column whose rows name DIFFERENT accounts
+ * is the genuine multi-account file the Account step's fan-out exists for, and is
+ * deliberately left alone.
+ *
+ * The column half of this was missing, and it failed silently: "401310-41678876"
+ * on every row read as a file holding TWO accounts, so the sort code 401310 —
+ * which passes every validation rule, being six digits with no label words — was
+ * onboarded as a bank account in its own right, with its own OU and its own
+ * Oracle receipts. Nothing downstream could catch it; a sort code is shaped
+ * exactly like a short account number.
+ *
+ * Module-level so the wizard shell (which gates Next on it) and the Columns tab
+ * (which renders the picker) share ONE rule instead of two copies that can drift.
+ */
+function ambiguousAccounts(
+  src: FieldSource, columns: string[], rows: string[][],
+  headerRow: number, subHeaderRow: number | null,
+): string[] {
+  if (!src) return [];
+  if (src.type === "cell") {
+    return splitAccounts(String(rows[src.row ?? 0]?.[src.col ?? 0] ?? ""));
+  }
+  if (src.type !== "column") return [];
+  const groups = fieldSampleValues(
+    src, columns, rows, headerRow, subHeaderRow, Number.MAX_SAFE_INTEGER)
+    .map((v) => splitAccounts(v))
+    .filter((g) => g.length > 0);
+  if (groups.length === 0 || !groups.every((g) => g.length > 1)) return [];
+  const first = groups[0].join(" ");
+  return groups.every((g) => g.join(" ") === first) ? groups[0] : [];
+}
+
 function fieldSampleValues(
   src: FieldSource, columns: string[], rows: string[][],
   headerRow: number, subHeaderRow: number | null, max = 8,
@@ -659,13 +700,12 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const backendAccountOk = testResult?.account_ok !== false;
   const accountValueOk = (!accountFieldReason && !accountIdentityReason && backendAccountOk) || overrideAccount;
 
-  // A single account cell holding multiple joined accounts ("A & B") is
-  // ambiguous — the user must pick one (radios on the Columns tab), which pins
-  // it as a fixed value. Only a CELL is forced; a column legitimately has many.
-  const accountCellAccounts = fieldMappings.account_number.type === "cell"
-    ? splitAccounts(String(activeRows[fieldMappings.account_number.row ?? 0]?.[fieldMappings.account_number.col ?? 0] ?? ""))
-    : [];
-  const accountMixedCellUnresolved = accountCellAccounts.length > 1;
+  // One source value naming several accounts is ambiguous -- the user must pick
+  // which one this config is for (radios on the Columns tab), and picking pins it
+  // as a fixed value. See ambiguousAccounts() for which mappings qualify and why.
+  const accountAmbiguousAccounts = ambiguousAccounts(
+    fieldMappings.account_number, columns, activeRows, headerRow ?? 0, subHeaderRow);
+  const accountMixedCellUnresolved = accountAmbiguousAccounts.length > 1;
 
   // ── Multi-account (Account step) ───────────────────────────────────────────────
   // A COLUMN locator normally finds several accounts in one file. All of the valid
@@ -719,7 +759,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const activeAccountIssue: { message: string; canOverride: boolean } | null =
     step === 3
       ? (accountMixedCellUnresolved
-          ? { message: `This account cell holds ${accountCellAccounts.length} account numbers — select the one this config is for in the Account Number field.`, canOverride: false }
+          ? { message: `The account value holds ${accountAmbiguousAccounts.length} account numbers — select the one this config is for in the Account Number field.`, canOverride: false }
           : accountFieldReason ? { message: accountFieldReason, canOverride: true } : null)
     : step === 5 ? (accountIdentityReason ? { message: accountIdentityReason, canOverride: true } : null)
     : step === 6 ? (testResult?.account_ok === false
@@ -1667,14 +1707,12 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
     };
   };
 
-  // Accounts found in a single CELL account mapping. Only a cell can be
-  // ambiguous this way — a column legitimately holds many accounts (one per
-  // row), so multiple there is fine and we don't force a pick.
-  const accountCellSplit = (): string[] => {
-    const s = fieldMappings.account_number;
-    if (s.type !== "cell") return [];
-    return splitAccounts(String(activeRows[s.row ?? 0]?.[s.col ?? 0] ?? ""));
-  };
+  // The account numbers this mapping is ambiguous between, if any -- ONE source
+  // value naming several. Shared with the wizard shell (which gates Next on it)
+  // via the module-level ambiguousAccounts(), so the picker rendered here and the
+  // Next-button gate can never disagree about whether a mapping is ambiguous.
+  const accountAmbiguousAccounts = ambiguousAccounts(
+    fieldMappings.account_number, columns, activeRows, hRow, subHeaderRow);
 
   // First real DATA value (after header + sub-header) for the sample display —
   // not activeRows[hRow+1], which is the sub-header row in two-row-header files.
@@ -1766,17 +1804,24 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
               )}
 
               {name === "account_number" && (() => {
-                const cellAccts = accountCellSplit();
-                // A single cell holding multiple joined accounts is ambiguous —
+                const cellAccts = accountAmbiguousAccounts;
+                // ONE source value holding several joined accounts is ambiguous —
                 // force the user to pick exactly one. Picking pins it as a fixed
-                // value so ingest uses that one account (not the mashed cell).
+                // value so ingest uses that one account (not the mashed value).
+                // Covers a mixed CELL ("A & B") and a COLUMN whose every row
+                // repeats the same pair ("401310-41678876") — see
+                // accountAmbiguousAccounts for why a column qualifies.
                 if (cellAccts.length > 1) {
+                  const isCol = fieldMappings.account_number.type === "column";
                   return (
                     <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-start gap-1 text-[9px] text-amber-700 font-semibold">
                         <AlertTriangle size={10} className="shrink-0 mt-px" />
                         <span className="leading-tight normal-case">
-                          This cell holds {cellAccts.length} account numbers — select the one this config is for:
+                          {isCol
+                            ? `Every row in this column holds the same ${cellAccts.length} account numbers`
+                            : `This cell holds ${cellAccts.length} account numbers`}
+                          {" — select the one this config is for:"}
                         </span>
                       </div>
                       <div className="space-y-0.5 pl-3.5">

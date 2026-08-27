@@ -68,8 +68,22 @@ export function accountRejectReason(value: string | null | undefined): string | 
 
 // Mirror of backend account_locator.split_accounts — splits a cell that may
 // hold several accounts ("41678876 & 41678884") into normalized tokens. Splits
-// on & , / + and 'and' only (never spaces, so "0002 0502 4781" stays intact).
-const ACCT_SEP = /\s*(?:&|,|\/|\+|\band\b)\s*/i;
+// on & , / + - and 'and' only (never spaces, so "0002 0502 4781" stays intact).
+//
+// '-' is a separator, same as '&'. An HSBC UK header cell reads
+// "401310-41678876" — sort code, hyphen, account number — and only the second
+// half is the account rows post against. Without it here, normalizeAccount()
+// strips the hyphen and the halves fuse into "40131041678876", an account that
+// exists nowhere. MUST stay in step with _ACCT_SEP in the backend's
+// app/bank_statement/account_locator.py: this file is what the wizard shows as
+// "Identified account" live, while the backend is what actually gets saved, so
+// a drift between the two means the wizard confidently previews one account and
+// the config stores another.
+//
+// A hyphen-GROUPED account ("4013-1041-6788-76") still survives: none of its
+// fragments clears looksLikeAccount()'s 6-char bar, so this falls through to
+// normalizing the whole cell — same fallback as the backend.
+const ACCT_SEP = /\s*(?:&|,|\/|\+|-|\band\b)\s*/i;
 function looksLikeAccount(n: string): boolean {
   return n.length >= 6 && /\d/.test(n);
 }
