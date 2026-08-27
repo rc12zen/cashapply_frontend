@@ -113,7 +113,17 @@ export function deriveSpecialFlags(detail: RowDetail): SpecialFlag[] {
     bg: "bg-violet-50", border: "border-violet-300", text: "text-violet-800",
     icon: <ArrowRightLeft size={14} className="text-violet-500 shrink-0 mt-0.5" />,
   });
-  if (isCrossLedger && !isCrossCurrency) flags.push({
+  // FIX: previously gated `&& !isCrossCurrency`, which suppressed this badge
+  // whenever Leg 1 (Invoice currency != Credited Currency) also fired --
+  // treating the two as mutually exclusive "levels" of the same signal.
+  // They're actually independent: Leg 1 is credited-vs-invoice currency,
+  // Leg 2 is invoice-vs-functional currency, and a row can genuinely be
+  // both at once (e.g. credited=GBP, invoice=USD, functional=GBP -- credited
+  // happens to equal functional, but the invoice still sits in a third
+  // currency). Both booleans drive real, independent parts of the Oracle
+  // payload (Amount/Currency vs. ConversionRate), so both badges should be
+  // visible whenever both are true, not just the "stronger" one.
+  if (isCrossLedger) flags.push({
     label: "Cross Ledger Currency",
     desc:  "Invoice currency differs from the OU functional currency. Oracle will apply a ConversionRate when booking this receipt into the ledger.",
     bg: "bg-indigo-50", border: "border-indigo-300", text: "text-indigo-800",
