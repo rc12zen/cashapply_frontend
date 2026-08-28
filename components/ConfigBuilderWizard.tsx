@@ -293,6 +293,11 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   // ── Step 7: Save ──────────────────────────────────────────────────────────────
   const [displayName, setDisplayName]     = useState("");
   const [bank, setBank]                   = useState("");
+  // Opt-in relabel of an account that already exists under a DIFFERENT bank name.
+  // Off by default: onboarding a new statement format for a known account must
+  // never silently rename it, since other configs and every past run refer to it.
+  // Sent as AccountAssignment.rename_bank_account.
+  const [renameBankAccount, setRenameBankAccount] = useState(false);
   const [currency, setCurrency]           = useState("");
   const [ouNumber, setOuNumber]           = useState("");
   // Business Units BEYOND the primary, for an account that receives money
@@ -594,6 +599,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
           bank: bank.trim() || undefined,
           currency: currency.trim() || undefined,
           override_account_validation: overrideAccount,
+          rename_bank_account: renameBankAccount,
         };
       });
     } else if (!ouNumber.trim() || !resolveBU(ouNumber)) {
@@ -622,6 +628,9 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         recipe,
         bank: bank.trim() || undefined,
         currency: currency.trim() || undefined,
+        // Opt-in relabel of an already-registered account whose bank name differs
+        // -- off unless the user ticked the box on the banner in the Account step.
+        rename_bank_account: renameBankAccount,
         ou_number: (multi ? assignments[accountNumber]?.ou_number ?? "" : ouNumber).trim(),
         business_unit: resolveBU(multi ? assignments[accountNumber]?.ou_number : ouNumber),
         // Extra BUs for a shared account, each carrying the same three
@@ -1033,6 +1042,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   accountIssues, validFoundAccounts, ignoredFoundAccounts, isMultiAccount,
                   locateTruncated,
                   selectedSheet, duplicateShapeSheets,
+                  knownAccounts, bank, renameBankAccount, setRenameBankAccount,
                 }} />
               )}
               {step === 6 && (
@@ -2679,6 +2689,7 @@ function StepLocateAccount({
   locating, locateError, handleLocate, extension,
   accountIssues, validFoundAccounts, ignoredFoundAccounts, isMultiAccount,
   locateTruncated, selectedSheet, duplicateShapeSheets,
+  knownAccounts, bank, renameBankAccount, setRenameBankAccount,
 }: {
   columns: string[];
   activeRows: string[][];
@@ -2700,6 +2711,10 @@ function StepLocateAccount({
   locateTruncated: number;
   selectedSheet: string;
   duplicateShapeSheets: { name: string; rows: number }[];
+  knownAccounts: Record<string, KnownAccountInfo>;
+  bank: string;
+  renameBankAccount: boolean;
+  setRenameBankAccount: (v: boolean) => void;
 }) {
   const t = accountLocator.type;
   const fmt = extension === "txt" ? "csv" : extension === "xlsm" ? "xlsx" : extension;
@@ -2712,6 +2727,24 @@ function StepLocateAccount({
     t === "regex" ? (accountLocator.in?.type === "cell" ? "regex_cell" : "regex_col") : t;
   const isRegex = t === "regex";
   const regexCellValue = String(activeRows[accountLocator.in?.row ?? 0]?.[accountLocator.in?.col ?? 0] ?? "");
+
+  // ── "You are attaching this to an account that already exists" ──────────────
+  // Account identity ignores leading zeros (backend match_key), so a statement
+  // reading "188603500" attaches to an account registered as "00188603500" --
+  // and the STORED form is kept, because that is what Oracle knows and what goes
+  // out as RemittanceBankAccountNumber. That is the right behaviour and it used
+  // to happen with nothing on screen to say so: the only hint was a small "exists
+  // (xlsx)" chip that says nothing about the number being different. Silently
+  // saving under a number the user never typed is exactly the kind of thing that
+  // has to be stated loudly, so it gets a real banner.
+  const pickedKnown = accountNumber ? knownAccounts[accountNumber] : undefined;
+  const registeredNumber = pickedKnown?.registered_account_number ?? null;
+  const numberDiffers = !!registeredNumber && registeredNumber !== accountNumber;
+  const registeredBank = pickedKnown?.bank ?? null;
+  const bankDiffers =
+    !!registeredBank && !!bank.trim() &&
+    registeredBank.trim().toLowerCase() !== bank.trim().toLowerCase();
+  const showExistingBanner = !!pickedKnown && (numberDiffers || bankDiffers);
 
   return (
     <div className="space-y-3">
@@ -2982,6 +3015,74 @@ function StepLocateAccount({
                     })}
                   </div>
                 </>
+              )}
+
+              {/* LOUD: this recipe is being attached to an account that already
+                  exists, under a number and/or a bank name that differ from what
+                  is on screen. See showExistingBanner above for why this is a
+                  banner and not another small chip. */}
+              {showExistingBanner && (
+                <div className="border-2 border-amber-400 bg-amber-50 rounded p-3 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600" />
+                    <div className="text-[12px] text-primary leading-snug">
+                      <div className="font-black uppercase tracking-wider text-[11px] text-amber-800">
+                        This account is already registered
+                      </div>
+                      {numberDiffers && (
+                        <>
+                          <p className="mt-1.5">
+                            Your statement reads{" "}
+                            <span className="font-mono font-bold">{accountNumber}</span>. The same
+                            account is already on file as{" "}
+                            <span className="font-mono font-bold">{registeredNumber}</span> — the
+                            difference is only leading zeros — so this <b>{fmt}</b> recipe is added
+                            to that existing account instead of creating a second one.
+                          </p>
+                          <p className="mt-2 border-l-2 border-amber-500 pl-2">
+                            <b>
+                              Receipts from this file will be posted to Oracle as{" "}
+                              <span className="font-mono">{accountNumber}</span>
+                            </b>
+                            , not <span className="font-mono">{registeredNumber}</span>. The
+                            remittance bank account sent to Oracle is taken from each row as the
+                            statement writes it, not from the registered account — so the same
+                            account can reach Oracle under either spelling depending on which file a
+                            row came from.{" "}
+                            <b>
+                              Check which form Oracle holds for this account before posting.
+                            </b>{" "}
+                            If Oracle only recognises{" "}
+                            <span className="font-mono">{registeredNumber}</span>, correct the
+                            number in the statement file and re-upload it before configuring —
+                            otherwise every receipt from this file will fail.
+                          </p>
+                        </>
+                      )}
+                      {bankDiffers && (
+                        <p className="mt-1.5">
+                          It is on file as <b>{registeredBank}</b>; you entered <b>{bank.trim()}</b>.
+                          The existing name is kept unless you tick the box below.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  {bankDiffers && (
+                    <label className="flex items-start gap-2 text-[11px] cursor-pointer pl-6">
+                      <input
+                        type="checkbox"
+                        checked={renameBankAccount}
+                        onChange={(e) => setRenameBankAccount(e.target.checked)}
+                        className="mt-0.5 cursor-pointer"
+                      />
+                      <span>
+                        Rename this account to <b>{bank.trim()}</b> — this changes it{" "}
+                        <b>everywhere</b>, including for its other statement formats and every past
+                        run.
+                      </span>
+                    </label>
+                  )}
+                </div>
               )}
 
               {/* Values the locator found that don't look like account numbers —
