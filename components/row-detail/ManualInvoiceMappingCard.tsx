@@ -19,8 +19,8 @@
  * needs to render it unconditionally and pass a callback to refresh the
  * row after a successful mapping.
  */
-import { AlertTriangle, Check, CheckCircle2, Hash, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, Check, CheckCircle2, Hash, Loader2, Search, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getMappingOptions, getInvoicesForCustomer, previewManualMapping, confirmManualMapping,
 } from "@/lib/api";
@@ -30,7 +30,7 @@ import CustomerCreditsPanel from "@/components/row-detail/CustomerCreditsPanel";
 import {
   RowDetail, MappingInvoiceOption, MappingOptionsResponse, MappingPreviewResponse,
   MappingCreditOption, MappingCreditContext,
-  fmt, fmtDate, formatApiError,
+  fmt, fmtDate, formatApiError, LIST_SEARCH_THRESHOLD,
 } from "@/components/row-detail/types";
 
 export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }: {
@@ -103,8 +103,28 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
   // blank after a successful confirm with no indication anything had
   // happened.
   const [showRemapPicker, setShowRemapPicker] = useState(false);
+  // Free-text filter over the invoice list. Only surfaced once the list is
+  // long enough to need it (see LIST_SEARCH_THRESHOLD) -- the median
+  // customer in the aging report has 3 open invoices, and putting a search
+  // box above three rows is friction, not help.
+  const [invoiceQuery, setInvoiceQuery] = useState("");
 
   useEffect(() => { setShowRemapPicker(false); }, [recordId]);
+
+  // Filter only -- deliberately NOT a re-sort. The aging report's own row
+  // order is preserved so the list reads the same here as it does in the
+  // source finance works from.
+  const visibleInvoiceOptions = useMemo(() => {
+    const q = invoiceQuery.trim().toLowerCase();
+    if (!q) return customerInvoiceOptions;
+    return customerInvoiceOptions.filter(
+      (inv) =>
+        inv.invoice_number.toLowerCase().includes(q) ||
+        (inv.currency || "").toLowerCase().includes(q),
+    );
+  }, [customerInvoiceOptions, invoiceQuery]);
+
+  const invoiceSearchVisible = customerInvoiceOptions.length > LIST_SEARCH_THRESHOLD;
 
   const fetchMappingOptions = useCallback(async () => {
     if (!recordId) return;
@@ -113,6 +133,7 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
     setSelectedCustomerForMapping("");
     setSelectedInvoiceNumbers(new Set());
     setMappingPreview(null);
+    setInvoiceQuery("");
     try {
       const res = await getMappingOptions(recordId);
       setMappingOptions(res.data);
@@ -137,6 +158,11 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
     setSelectedInvoiceNumbers(new Set());
     setMappingPreview(null);
     setMappingOptionsError("");
+    // A filter left over from the previous customer would silently hide the
+    // new one's invoices -- and with the search box only appearing above the
+    // threshold, a short list could end up looking empty with no visible
+    // control explaining why.
+    setInvoiceQuery("");
     if (!customerName) {
       setCustomerInvoiceOptions([]);
       // Clear the credits too — they were scoped to the previous customer,
@@ -327,38 +353,101 @@ export default function ManualInvoiceMappingCard({ recordId, detail, onMapped }:
 
               {customerInvoiceOptions.length > 0 ? (
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
-                    Select Invoice(s) — amounts auto-loaded from aging report
-                  </label>
+                  <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
+                      Select Invoice(s) — amounts auto-loaded from aging report
+                    </label>
+                    {/* Only meaningful once the list is long enough to be
+                        filtered or scrolled past. The selected count matters
+                        most exactly then: a filter can hide rows the SPOC has
+                        already ticked, and selections deliberately survive
+                        filtering, so the tally is the only way to see them. */}
+                    {invoiceSearchVisible && (
+                      <span className="text-[10px] font-bold text-gray-400 tabular-nums">
+                        {visibleInvoiceOptions.length === customerInvoiceOptions.length
+                          ? `${customerInvoiceOptions.length} invoices`
+                          : `${visibleInvoiceOptions.length} of ${customerInvoiceOptions.length}`}
+                        {selectedInvoiceNumbers.size > 0 && (
+                          <span className="text-emerald-600"> · {selectedInvoiceNumbers.size} selected</span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+
+                  {invoiceSearchVisible && (
+                    <div className="relative">
+                      <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="text"
+                        value={invoiceQuery}
+                        onChange={(e) => setInvoiceQuery(e.target.value)}
+                        placeholder="Filter by invoice number or currency…"
+                        className="w-full text-[11px] font-medium border border-gray-300 rounded-xs pl-7 pr-7 py-1.5 outline-none focus:border-[#222222] transition-colors"
+                      />
+                      {invoiceQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setInvoiceQuery("")}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 cursor-pointer"
+                          aria-label="Clear invoice filter"
+                        >
+                          <X size={11} />
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Height-capped with internal scroll so a 1,159-invoice
+                      customer can't push the credits panel, the qualification
+                      feedback and the confirm button off the page. The cap is
+                      a max-height, so short lists still size to their content
+                      and never gain a scrollbar. */}
                   <div className="border border-gray-200 rounded-xs overflow-hidden">
-                    <table className="w-full text-[11px]">
-                      <thead>
-                        <tr className="bg-[#222222] text-white">
-                          <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider w-8"></th>
-                          <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Invoice #</th>
-                          <th className="px-3 py-2 text-right text-[9px] font-black uppercase tracking-wider">Outstanding</th>
-                          <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Currency</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {customerInvoiceOptions.map((inv) => (
-                          <tr key={inv.invoice_number}
-                            className="hover:bg-blue-50/30 cursor-pointer"
-                            onClick={() => toggleInvoiceForMapping(inv.invoice_number)}>
-                            <td className="px-3 py-2">
-                              <input type="checkbox"
-                                checked={selectedInvoiceNumbers.has(inv.invoice_number)}
-                                onChange={() => toggleInvoiceForMapping(inv.invoice_number)}
-                                onClick={(e) => e.stopPropagation()}
-                                className="cursor-pointer" />
-                            </td>
-                            <td className="px-3 py-2 font-mono font-bold text-[#222222]">{inv.invoice_number}</td>
-                            <td className="px-3 py-2 font-mono font-bold text-right text-[#222222]">{fmt(inv.outstanding_amount)}</td>
-                            <td className="px-3 py-2 text-gray-400 font-mono">{inv.currency || "—"}</td>
+                    {/* max-h is a STATIC Tailwind class on purpose: it compiles
+                        into the stylesheet (governed by style-src 'self')
+                        rather than becoming a style="" attribute, which the
+                        app's CSP blocks outright. Keep it literal -- a value
+                        interpolated from a JS constant would not be seen by
+                        Tailwind's scanner and would silently not exist. */}
+                    <div className="max-h-[320px] overflow-y-auto">
+                      <table className="w-full text-[11px]">
+                        <thead>
+                          {/* sticky on the cells, not the <tr>/<thead> -- those
+                              are unreliable targets for position:sticky. */}
+                          <tr className="bg-[#222222] text-white">
+                            <th className="sticky top-0 z-10 bg-[#222222] px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider w-8"></th>
+                            <th className="sticky top-0 z-10 bg-[#222222] px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Invoice #</th>
+                            <th className="sticky top-0 z-10 bg-[#222222] px-3 py-2 text-right text-[9px] font-black uppercase tracking-wider">Outstanding</th>
+                            <th className="sticky top-0 z-10 bg-[#222222] px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Currency</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {visibleInvoiceOptions.length === 0 && (
+                            <tr>
+                              <td colSpan={4} className="px-3 py-4 text-[11px] text-gray-400 italic text-center">
+                                No invoice matches “{invoiceQuery}”.
+                              </td>
+                            </tr>
+                          )}
+                          {visibleInvoiceOptions.map((inv) => (
+                            <tr key={inv.invoice_number}
+                              className="hover:bg-blue-50/30 cursor-pointer"
+                              onClick={() => toggleInvoiceForMapping(inv.invoice_number)}>
+                              <td className="px-3 py-2">
+                                <input type="checkbox"
+                                  checked={selectedInvoiceNumbers.has(inv.invoice_number)}
+                                  onChange={() => toggleInvoiceForMapping(inv.invoice_number)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="cursor-pointer" />
+                              </td>
+                              <td className="px-3 py-2 font-mono font-bold text-[#222222]">{inv.invoice_number}</td>
+                              <td className="px-3 py-2 font-mono font-bold text-right text-[#222222]">{fmt(inv.outstanding_amount)}</td>
+                              <td className="px-3 py-2 text-gray-400 font-mono">{inv.currency || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               ) : mappingOptions.customer_identified ? (

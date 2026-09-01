@@ -61,7 +61,7 @@
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, editReceiptFields, settlementOverride, parkOverpayment, reverseReceiptInvoice, deleteReceipt } from "@/lib/api";
+import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, restoreDiscarded, editGlRate, editReceiptFields, settlementOverride, parkOverpayment, reverseReceiptInvoice, deleteReceipt } from "@/lib/api";
 
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
@@ -85,6 +85,7 @@ import OracleFusionCard from "@/components/row-detail/OracleFusionCard";
 import EditGlRateModal from "@/components/row-detail/EditGlRateModal";
 import EditReceiptModal from "@/components/row-detail/EditReceiptModal";
 import RejectRowModal from "@/components/row-detail/RejectRowModal";
+import MarkEligibleModal from "@/components/row-detail/MarkEligibleModal";
 import ReopenAndReviewModal from "@/components/row-detail/ReopenAndReviewModal";
 import ReverseReceiptModal from "@/components/row-detail/ReverseReceiptModal";
 import DeleteReceiptModal from "@/components/row-detail/DeleteReceiptModal";
@@ -204,12 +205,39 @@ export default function RowDetailPage() {
     setActionLoading(false);
   };
 
-  const handleMarkEligible = async () => {
+  // Mark Eligible is the one action on an Unidentified row that writes to
+  // Oracle, so it confirms first — through a modal showing the actual payload
+  // rather than a bare "Sure?", because the SPOC is authorising a receipt for a
+  // payment with no identified customer. See MarkEligibleModal.
+  const [markEligibleModalOpen, setMarkEligibleModalOpen] = useState(false);
+  const [markEligibleBusy, setMarkEligibleBusy]           = useState(false);
+  const [markEligibleError, setMarkEligibleError]         = useState("");
+
+  const submitMarkEligible = async () => {
     if (!detail) return;
-    setActionLoading(true); setActionError("");
-    try { await markEligible(recordId); await fetchDetail(); }
-    catch (e: any) { setActionError(formatApiError(e, "Could not mark this row eligible.")); }
-    setActionLoading(false);
+    setMarkEligibleBusy(true); setMarkEligibleError("");
+    try {
+      const res = await markEligible(recordId);
+      // A 200 does NOT mean the receipt exists — the endpoint reports an Oracle
+      // refusal in the body rather than as an HTTP error, and on refusal the
+      // row is deliberately left undecided so both buttons come back. Keep the
+      // modal open and say so, instead of closing on an apparent success.
+      if (res?.data && res.data.receipt_created === false) {
+        setMarkEligibleError(
+          res.data.message
+            ? `Oracle refused the receipt: ${res.data.message}`
+            : "Oracle refused the receipt. The row is unchanged — you can retry or discard it."
+        );
+        await fetchDetail();
+        return;
+      }
+      setMarkEligibleModalOpen(false);
+      await fetchDetail();
+    } catch (e) {
+      setMarkEligibleError(formatApiError(e, "Could not create the receipt for this row."));
+    } finally {
+      setMarkEligibleBusy(false);
+    }
   };
 
   const handleDiscard = async () => {
@@ -218,6 +246,18 @@ export default function RowDetailPage() {
     setActionLoading(true); setActionError("");
     try { await discardEntry(recordId, comment); await fetchDetail(); }
     catch (e: any) { setActionError(formatApiError(e, "Could not discard this row.")); }
+    setActionLoading(false);
+  };
+
+  // Undo a Discard. Deliberately asks for a reason the same way Discard does —
+  // the two are a matched pair, and "why was this brought back" is exactly as
+  // worth recording as "why was it discarded".
+  const handleRestoreDiscarded = async () => {
+    if (!detail) return;
+    const comment = window.prompt("Reason for restoring this row (optional):") || undefined;
+    setActionLoading(true); setActionError("");
+    try { await restoreDiscarded(recordId, comment); await fetchDetail(); }
+    catch (e) { setActionError(formatApiError(e, "Could not restore this row.")); }
     setActionLoading(false);
   };
 
@@ -369,8 +409,9 @@ export default function RowDetailPage() {
       else if (code === "reopen") await handleReopen();
       else if (code === "retry_oracle") await handleRetry();
       else if (code === "recheck_remittance") await handleRecheckRemittance();
-      else if (code === "mark_eligible") await handleMarkEligible();
+      else if (code === "mark_eligible") { setMarkEligibleError(""); setMarkEligibleModalOpen(true); }
       else if (code === "discard") await handleDiscard();
+      else if (code === "restore_discarded") await handleRestoreDiscarded();
       else if (code === "settlement_override") await handleSettlementOverride();
       else if (code === "edit_gl_rate") setGlRateModalOpen(true);
       else if (code === "edit_receipt") setEditReceiptModalOpen(true);
@@ -599,6 +640,16 @@ export default function RowDetailPage() {
           error={rejectError}
           onCancel={() => { setRejectModalOpen(false); setRejectError(""); }}
           onSubmit={submitReject}
+        />
+      )}
+
+      {markEligibleModalOpen && (
+        <MarkEligibleModal
+          payload={detail?.oracle?.payload}
+          saving={markEligibleBusy}
+          error={markEligibleError}
+          onCancel={() => { setMarkEligibleModalOpen(false); setMarkEligibleError(""); }}
+          onConfirm={submitMarkEligible}
         />
       )}
 

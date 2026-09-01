@@ -156,6 +156,13 @@ export const setUserActive = (id: number, is_active: boolean) =>
 // "ou:manage" to edit -- see bff/bank_accounts_routes.py) ──────────────────────
 export const getBankAccounts = () => API.get("/api/bank-accounts");
 export const getBusinessUnitOptions = () => API.get("/api/bank-accounts/business-units");
+// Create a Business Unit WITHOUT onboarding a bank statement for it first.
+// Until this existed, an OU could only come into being as a side-effect of
+// saving a config in Config Builder — which made the multi-BU case impossible,
+// since an account's SECOND Business Unit often has no statement of its own.
+export const createOrganizationUnit = (data: {
+  ou_number: string; ou_name: string; functional_currency: string;
+}) => API.post("/api/bank-accounts/business-units", data);
 // Changing an account's Business Unit(s) only affects analysis runs started
 // AFTER the change -- already-completed runs keep whatever was current when
 // they ran (see bff/bank_accounts_routes.py's module docstring).
@@ -519,6 +526,11 @@ export const parkOverpayment    = (id: number, disposition: string, comment?: st
 // the row to its own "Discarded" state without ever creating one.
 export const markEligible        = (id: number)                   => API.post(`/api/hitl/mark-eligible/${id}`, {});
 export const discardEntry        = (id: number, comment?: string) => API.post(`/api/hitl/discard/${id}`, { comment });
+// Undo a Discard — back to Unidentified with no eligibility decision recorded,
+// so Mark Eligible and Discard are both offered again. Safe because a discarded
+// row has no Oracle receipt to reverse; see hitl/service.py's
+// restore_discarded_row().
+export const restoreDiscarded    = (id: number, comment?: string) => API.post(`/api/hitl/restore-discarded/${id}`, { comment });
 // Needs Distribution rows only — see hitl/service.py's
 // override_settlement_as_customer_payment(). Moves the row out of the
 // broker/card/cheque bucket into the standard Manual Invoice Mapping flow.

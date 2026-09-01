@@ -24,11 +24,11 @@
  * next Oracle retry, though -- rule_engine/fx_service.py reads
  * organization_units live, with no caching.
  */
-import { Landmark, Loader2, RefreshCw, Building2 } from "lucide-react";
+import { Landmark, Loader2, Plus, RefreshCw, Building2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   getBankAccounts, getBusinessUnitOptions,
-  updateBankAccountBusinessUnits, updateOrganizationUnit,
+  updateBankAccountBusinessUnits, updateOrganizationUnit, createOrganizationUnit,
   getSettlementIdentifiers, createNarrativeIdentifier, createProviderIdentifier,
   deleteSettlementIdentifier,
 } from "@/lib/api";
@@ -40,6 +40,7 @@ import BankAccountsTable, { type BankAccountRow } from "@/components/bank-accoun
 import EditBusinessUnitsModal from "@/components/bank-accounts/EditBusinessUnitsModal";
 import OrganizationUnitsTable, { type OrganizationUnitRow } from "@/components/bank-accounts/OrganizationUnitsTable";
 import EditOrganizationUnitModal from "@/components/bank-accounts/EditOrganizationUnitModal";
+import CreateOrganizationUnitModal from "@/components/bank-accounts/CreateOrganizationUnitModal";
 import SettlementIdentifiersCard, {
   type SettlementIdentifiersGrouped,
 } from "@/components/bank-accounts/SettlementIdentifiersCard";
@@ -65,6 +66,11 @@ export default function AccountsAndOUsPage() {
   const [editingOU, setEditingOU] = useState<OrganizationUnitRow | null>(null);
   const [savingOU, setSavingOU] = useState(false);
   const [ouModalError, setOuModalError] = useState("");
+  // Creating a Business Unit outright — the missing path that made a
+  // multi-BU bank account impossible to configure. See CreateOrganizationUnitModal.
+  const [createOUOpen, setCreateOUOpen] = useState(false);
+  const [creatingOU, setCreatingOU] = useState(false);
+  const [createOUError, setCreateOUError] = useState("");
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -132,6 +138,27 @@ export default function AccountsAndOUsPage() {
       setAccountModalError(getErrorMessage(e, "Could not update Business Unit(s)."));
     } finally {
       setSavingAccount(false);
+    }
+  };
+
+  const handleCreateOU = async (data: {
+    ou_number: string; ou_name: string; functional_currency: string;
+  }) => {
+    setCreatingOU(true);
+    setCreateOUError("");
+    try {
+      await createOrganizationUnit(data);
+      setSuccess(
+        `Created ${data.ou_name}(${data.ou_number}) — Oracle will receive that exact string. ` +
+        `It can now be assigned as a primary or additional Business Unit.`
+      );
+      setTimeout(() => setSuccess(""), 6000);
+      setCreateOUOpen(false);
+      fetchAll();
+    } catch (e) {
+      setCreateOUError(getErrorMessage(e, "Could not create this Business Unit."));
+    } finally {
+      setCreatingOU(false);
     }
   };
 
@@ -243,6 +270,19 @@ export default function AccountsAndOUsPage() {
               {organizationUnits.length}
             </span>
           )}
+          {/* Same permission tier as editing an OU below — that edit already
+              carries the identical Oracle exact-match risk, so creating one is
+              not a higher-stakes act than the correction path beside it. */}
+          {flags.canManageOU && (
+            <button
+              onClick={() => { setCreateOUOpen(true); setCreateOUError(""); }}
+              className="ml-auto inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider
+                         text-gray-600 bg-white border border-gray-300 hover:border-[#222222] hover:text-[#222222]
+                         px-2.5 py-1.5 rounded-sm shadow-2xs transition-colors cursor-pointer"
+            >
+              <Plus size={12} className="stroke-[3]" /> Add Business Unit
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -290,6 +330,15 @@ export default function AccountsAndOUsPage() {
           error={accountModalError}
           onCancel={() => setEditingAccount(null)}
           onSubmit={handleSaveBusinessUnits}
+        />
+      )}
+
+      {createOUOpen && (
+        <CreateOrganizationUnitModal
+          saving={creatingOU}
+          error={createOUError}
+          onCancel={() => { setCreateOUOpen(false); setCreateOUError(""); }}
+          onSubmit={handleCreateOU}
         />
       )}
 

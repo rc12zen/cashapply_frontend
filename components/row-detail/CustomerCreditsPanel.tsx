@@ -31,9 +31,10 @@
  *
  * Backend: hitl/manual_mapping.py's _credit_context().
  */
-import { Info, TicketPercent, Wallet } from "lucide-react";
+import { Info, Search, TicketPercent, Wallet, X } from "lucide-react";
+import { useMemo, useState } from "react";
 import {
-  MappingCreditOption, MappingCreditContext, fmt,
+  MappingCreditOption, MappingCreditContext, fmt, LIST_SEARCH_THRESHOLD,
 } from "@/components/row-detail/types";
 
 function CreditTable({ rows, suggested, muted }: {
@@ -41,54 +42,118 @@ function CreditTable({ rows, suggested, muted }: {
   suggested?: string | null;
   muted?: boolean;
 }) {
+  const [query, setQuery] = useState("");
+
+  // Filter only -- never a re-sort, matching the invoice picker above. The
+  // aging report's own row order is what finance reads elsewhere.
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (c) =>
+        c.document_number.toLowerCase().includes(q) ||
+        (c.currency || "").toLowerCase().includes(q) ||
+        (c.description || "").toLowerCase().includes(q),
+    );
+  }, [rows, query]);
+
+  const searchVisible = rows.length > LIST_SEARCH_THRESHOLD;
+  const headCls = muted ? "bg-gray-500" : "bg-[#222222]";
+
   return (
-    <div className="border border-gray-200 rounded-xs overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-[11px]">
-          <thead>
-            <tr className={muted ? "bg-gray-500 text-white" : "bg-[#222222] text-white"}>
-              <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Document #</th>
-              <th className="px-3 py-2 text-right text-[9px] font-black uppercase tracking-wider">Amount</th>
-              <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Currency</th>
-              <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Date</th>
-              <th className="px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider">Description</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {rows.map((c) => {
-              const isSuggested = !!suggested && c.document_number === suggested;
-              return (
-                <tr
-                  key={`${c.document_number}-${c.amount}`}
-                  className={isSuggested ? "bg-emerald-50" : undefined}
-                >
-                  <td className="px-3 py-2 font-mono font-bold text-[#222222] whitespace-nowrap">
-                    {c.document_number}
-                    {isSuggested && (
-                      <span className="ml-2 inline-block px-1.5 py-0.5 rounded-xs bg-emerald-600 text-white text-[8px] font-black uppercase tracking-wider align-middle">
-                        Matches shortfall
-                      </span>
-                    )}
-                  </td>
-                  {/* Shown with a leading minus: the source row is negative
-                      and this REDUCES what the customer owes. The backend
-                      hands over a positive magnitude, so the sign is
-                      presentational. */}
-                  <td className="px-3 py-2 font-mono font-bold text-right text-amber-700 whitespace-nowrap">
-                    −{fmt(c.amount)}
-                  </td>
-                  <td className="px-3 py-2 text-gray-400 font-mono">{c.currency || "—"}</td>
-                  <td className="px-3 py-2 text-gray-400 font-mono whitespace-nowrap">{c.document_date || "—"}</td>
-                  <td className="px-3 py-2 text-gray-600 max-w-[22rem] truncate" title={c.description || ""}>
-                    {c.description || <span className="text-gray-300">—</span>}
+    <>
+      {searchVisible && (
+        <div className="flex items-center gap-2 mb-1.5">
+          <div className="relative flex-1">
+            <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter by document number, currency or description…"
+              className="w-full text-[11px] font-medium border border-gray-300 rounded-xs pl-7 pr-7 py-1.5 outline-none focus:border-[#222222] transition-colors"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 cursor-pointer"
+                aria-label="Clear filter"
+              >
+                <X size={11} />
+              </button>
+            )}
+          </div>
+          <span className="text-[10px] font-bold text-gray-400 tabular-nums shrink-0">
+            {visible.length === rows.length ? `${rows.length} rows` : `${visible.length} of ${rows.length}`}
+          </span>
+        </div>
+      )}
+
+      {/* Height-capped with internal scroll: Assurant alone carries 164 open
+          credit memos in one OU (see this file's docstring), which unbounded
+          would bury everything rendered below the panel. max-h, so short
+          lists size to content and never gain a scrollbar. Literal Tailwind
+          class -- an inline style="" would be blocked by the app's CSP, and a
+          class built from a JS constant is invisible to Tailwind's scanner. */}
+      <div className="border border-gray-200 rounded-xs overflow-hidden">
+        <div className="max-h-[320px] overflow-auto">
+          <table className="w-full text-[11px]">
+            <thead>
+              {/* sticky on the cells, not the <tr>/<thead> -- those are
+                  unreliable targets for position:sticky. The background has
+                  to be repeated per-cell or rows show through underneath. */}
+              <tr className={`${headCls} text-white`}>
+                <th className={`sticky top-0 z-10 ${headCls} px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider`}>Document #</th>
+                <th className={`sticky top-0 z-10 ${headCls} px-3 py-2 text-right text-[9px] font-black uppercase tracking-wider`}>Amount</th>
+                <th className={`sticky top-0 z-10 ${headCls} px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider`}>Currency</th>
+                <th className={`sticky top-0 z-10 ${headCls} px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider`}>Date</th>
+                <th className={`sticky top-0 z-10 ${headCls} px-3 py-2 text-left text-[9px] font-black uppercase tracking-wider`}>Description</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {visible.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-3 py-4 text-[11px] text-gray-400 italic text-center">
+                    No row matches “{query}”.
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              )}
+              {visible.map((c) => {
+                const isSuggested = !!suggested && c.document_number === suggested;
+                return (
+                  <tr
+                    key={`${c.document_number}-${c.amount}`}
+                    className={isSuggested ? "bg-emerald-50" : undefined}
+                  >
+                    <td className="px-3 py-2 font-mono font-bold text-[#222222] whitespace-nowrap">
+                      {c.document_number}
+                      {isSuggested && (
+                        <span className="ml-2 inline-block px-1.5 py-0.5 rounded-xs bg-emerald-600 text-white text-[8px] font-black uppercase tracking-wider align-middle">
+                          Matches shortfall
+                        </span>
+                      )}
+                    </td>
+                    {/* Shown with a leading minus: the source row is negative
+                        and this REDUCES what the customer owes. The backend
+                        hands over a positive magnitude, so the sign is
+                        presentational. */}
+                    <td className="px-3 py-2 font-mono font-bold text-right text-amber-700 whitespace-nowrap">
+                      −{fmt(c.amount)}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400 font-mono">{c.currency || "—"}</td>
+                    <td className="px-3 py-2 text-gray-400 font-mono whitespace-nowrap">{c.document_date || "—"}</td>
+                    <td className="px-3 py-2 text-gray-600 max-w-[22rem] truncate" title={c.description || ""}>
+                      {c.description || <span className="text-gray-300">—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

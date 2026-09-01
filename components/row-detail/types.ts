@@ -410,6 +410,22 @@ export function deriveStatus(oracle: RowDetail["oracle"]) {
   return "pending";
 }
 
+/**
+ * Row count above which a Row Detail list grows a filter box and a result
+ * count. Below it, the list renders plainly.
+ *
+ * Shared by the Manual Invoice Mapping invoice picker and the Customer
+ * Credits panel so the two can't drift into different behaviour on the same
+ * screen -- they sit one above the other, and a search box appearing on one
+ * table but not the other at similar lengths reads as a bug.
+ *
+ * 15 comes from the aging report's actual shape: the median customer has 3
+ * open invoices and p75 is 9, so a search box would be noise for ~87% of
+ * customers -- but p90 is 32, p99 is 268, and the worst customer has 1,159
+ * invoices and 164 open credit memos in a single OU.
+ */
+export const LIST_SEARCH_THRESHOLD = 15;
+
 export const STATUS_CHIP: Record<string, string> = {
   processed:  "bg-emerald-100 text-emerald-700 border-emerald-300",
   rejected:   "bg-red-100 text-red-700 border-red-300",

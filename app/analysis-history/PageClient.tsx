@@ -333,11 +333,21 @@ function AnalysisHistoryPageInner() {
     setLoading(false);
   }, [selectedTriggeredBy]);
 
+  // Skip only while a custom range is INCOMPLETE -- not for the whole time
+  // Custom Range is selected. The old guard returned unconditionally on
+  // "Custom Range", which meant two things silently didn't work:
+  //   * changing "Started By" reloaded nothing (the pill moved, the table
+  //     didn't), even though selectedTriggeredBy is a dependency here;
+  //   * switching away to e.g. Today and back left the previous period's rows
+  //     on screen under a "Custom Range" label with both dates still filled,
+  //     because the dates persist in state and nothing re-fetched.
+  // Depending on the dates too means picking them drives the reload, which is
+  // why the date inputs below no longer call doLoadRuns themselves.
   useEffect(() => {
-    if (timePeriod === "Custom Range") return;
+    if (timePeriod === "Custom Range" && (!customStart || !customEnd)) return;
     doLoadRuns(timePeriod, customStart, customEnd);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timePeriod, selectedTriggeredBy]);
+  }, [timePeriod, selectedTriggeredBy, customStart, customEnd]);
 
   useEffect(() => { doLoadRuns("Latest", "", ""); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -620,10 +630,12 @@ function AnalysisHistoryPageInner() {
           </div>
           {isCustomRangeActive && (
             <div className="flex items-center gap-1.5 border-l border-gray-200 pl-3">
-              <input type="date" value={customStart} onChange={(e) => { const v=e.target.value; setCustomStart(v); if(customEnd) doLoadRuns("Custom Range",v,customEnd); }}
+              <input type="date" value={customStart} max={customEnd || undefined}
+                onChange={(e) => setCustomStart(e.target.value)}
                 className="bg-gray-50 border border-gray-300 rounded-sm text-[10px] font-bold text-gray-600 px-2 py-1 outline-none focus:border-[#222222]" />
               <span className="text-[10px] font-bold text-gray-400">TO</span>
-              <input type="date" value={customEnd} onChange={(e) => { const v=e.target.value; setCustomEnd(v); if(customStart) doLoadRuns("Custom Range",customStart,v); }}
+              <input type="date" value={customEnd} min={customStart || undefined}
+                onChange={(e) => setCustomEnd(e.target.value)}
                 className="bg-gray-50 border border-gray-300 rounded-sm text-[10px] font-bold text-gray-600 px-2 py-1 outline-none focus:border-[#222222]" />
             </div>
           )}
