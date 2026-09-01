@@ -56,7 +56,7 @@ import {
   CheckSquare, CheckCircle2, ChevronDown, Download, Eye, FileText,
   Landmark, Layers, Loader2, RefreshCw, Search,
   ShieldCheck, Sparkles, User, X, HelpCircle, Ban,
-  Split, TrendingDown, Trash2, TrendingUp, Archive,
+  Split, TrendingDown, Trash2, TrendingUp, Archive, RotateCcw,
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Suspense } from "react";
@@ -67,6 +67,7 @@ import BreakupModal from "@/components/BreakupModal";
 import {
   getRunHistory, getRunHistoryFilterOptions, getRunSummary, approveEntry, rejectEntry, approveBulk,
   getFilterOptions, getFilePreview, getAgingPreview, retryOracle, getBreakupAnalysis,
+  createReceiptsBulk,
 } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { usePageGuard } from "@/lib/usePageGuard";
@@ -139,6 +140,9 @@ interface RunMetrics {
   rejected:            number;
   post_failed:         number;
   discarded:           number;
+  // A row whose LAST applied invoice was unapplied (SOAP
+  // processUnapplyReceipt) — receipt still live, pending manual remap.
+  receipt_reversed:    number;
 }
 
 interface LineItem {
@@ -201,7 +205,8 @@ type TabKeyNoAll =
   | "processed"
   | "rejected"
   | "post_failed"
-  | "discarded";
+  | "discarded"
+  | "receipt_reversed";
 
 type TabKey = "all" | TabKeyNoAll;
 
@@ -294,6 +299,14 @@ function AnalysisHistoryPageInner() {
   // ── Bulk approve (Ready for Oracle) ─────────────────────────────────────
   const [bulkApproving, setBulkApproving] = useState(false);
   const [bulkResult, setBulkResult]       = useState<{ posted: number; postFailed: number; skipped: number } | null>(null);
+  // ── Bulk create receipts (Ready for Oracle only) ────────────────────────
+  // Separate feature from bulk approve above — receipts are no longer
+  // created automatically at analysis time, so this is the explicit
+  // "create them now" action. Deliberately its OWN, stricter eligibility
+  // (ready_for_oracle only, not short_payment/overpayment) — see
+  // hitl/service.py's create_receipts_bulk().
+  const [bulkCreating, setBulkCreating]   = useState(false);
+  const [bulkCreateResult, setBulkCreateResult] = useState<{ created: number; skipped: number } | null>(null);
 
   const setRowError = (id: number, msg: string) => {
     setRowErrors((p) => ({ ...p, [id]: msg }));
@@ -479,6 +492,38 @@ function AnalysisHistoryPageInner() {
     setTimeout(() => setBulkResult(null), 8000);
   };
 
+  // Only ready_for_oracle rows without an already-created receipt — bulk
+  // creation is deliberately narrower than bulk approve's 3-category
+  // eligibility above (short_payment/overpayment rows still only get their
+  // receipt lazily, at Approve time).
+  const selectedCreateEligibleIds = useMemo(
+    () => activeRows
+      .filter((l) => selectedLines[l.id] && l._source === "matched"
+        && l.category === "ready_for_oracle"
+        && l.oracle_post_status !== "success")
+      .map((l) => l.id),
+    [activeRows, selectedLines],
+  );
+
+  const handleBulkCreateReceipts = async () => {
+    if (selectedCreateEligibleIds.length === 0) return;
+    setBulkCreating(true);
+    setBulkCreateResult(null);
+    try {
+      const res = await createReceiptsBulk(selectedCreateEligibleIds);
+      setBulkCreateResult({
+        created: res.data.created_count ?? 0,
+        skipped: res.data.skipped_count ?? 0,
+      });
+      setSelectedLines({});
+      if (viewingRun) await loadRunDetail(viewingRun);
+    } catch (e: any) {
+      setBulkCreateResult({ created: 0, skipped: selectedCreateEligibleIds.length });
+    }
+    setBulkCreating(false);
+    setTimeout(() => setBulkCreateResult(null), 8000);
+  };
+
   const filteredRuns = useMemo(() => runs.filter((r) => {
     const matchBank = selectedBank === "All Banks" || (r.bank_names||[]).includes(selectedBank);
     const matchBU   = selectedBU   === "All BUs"   || (r.business_units||[]).includes(selectedBU);
@@ -546,6 +591,7 @@ function AnalysisHistoryPageInner() {
     { key: "rejected",            label: "Rejected",               count: m?.rejected ?? 0 },
     { key: "post_failed",         label: "Post Failed",            count: m?.post_failed ?? 0 },
     { key: "discarded",           label: "Discarded",              count: m?.discarded ?? 0 },
+    { key: "receipt_reversed",    label: "Receipt Reversed — Pending Remap", count: m?.receipt_reversed ?? 0 },
   ];
 
   // ── History List ──────────────────────────────────────────────────────────
@@ -771,6 +817,7 @@ function AnalysisHistoryPageInner() {
                 { label:"Rejected",            value:m?.rejected            ??0, sub:"Rejected by SPOC",                            icon:<X size={12} className="stroke-[2.5]"/>,           color:"text-red-500"     },
                 { label:"Post Failed",         value:m?.post_failed         ??0, sub:"Approved but Oracle POST failed",            icon:<Ban size={12}/>,                                  color:"text-amber-600"   },
                 { label:"Discarded",           value:m?.discarded           ??0, sub:"Unidentified — judged not a real receipt",   icon:<Trash2 size={12}/>,                               color:"text-gray-500"    },
+                { label:"Receipt Reversed",    value:m?.receipt_reversed    ??0, sub:"Invoice unapplied — receipt live, pending remap", icon:<RotateCcw size={12}/>,                      color:"text-amber-600"   },
               ].map(({ label, value, sub, icon, color }) => (
                 <div key={label} className="border border-gray-200 p-3 rounded-sm bg-gray-50/30 flex flex-col justify-between">
                   <div>
@@ -801,6 +848,26 @@ function AnalysisHistoryPageInner() {
                           : "Approve Selected"}
                     </button>
                   )}
+                  {/* Receipts are no longer created automatically at analysis
+                      time — this is the explicit "create them now" action,
+                      scoped to ready_for_oracle only (see
+                      hitl/service.py::create_receipts_bulk()). Shipped live
+                      (no flag) since this is a new capability, not a
+                      previously-built-then-hidden one like bulk approve above. */}
+                  {activeTab === "ready_for_oracle" && (
+                    <button
+                      onClick={handleBulkCreateReceipts}
+                      disabled={selectedCreateEligibleIds.length === 0 || bulkCreating}
+                      title={selectedCreateEligibleIds.length === 0 ? "Select one or more rows below to create receipts for them together" : undefined}
+                      className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-sm transition-colors cursor-pointer whitespace-nowrap shadow-xs disabled:opacity-40 disabled:cursor-not-allowed">
+                      {bulkCreating ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                      {bulkCreating
+                        ? "Creating…"
+                        : selectedCreateEligibleIds.length > 0
+                          ? `Create Receipts (${selectedCreateEligibleIds.length})`
+                          : "Create Receipts"}
+                    </button>
+                  )}
                   <button
                     onClick={() => router.push(`/shortage-review${viewingRun ? `?run_id=${viewingRun.run_id}` : ""}`)}
                     className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-sm transition-colors cursor-pointer whitespace-nowrap shadow-xs">
@@ -825,6 +892,15 @@ function AnalysisHistoryPageInner() {
                   </span>
                 </div>
               )}
+              {bulkCreateResult && (
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-xs text-[11px] font-bold ${bulkCreateResult.skipped > 0 ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
+                  {bulkCreateResult.skipped > 0 ? <AlertTriangle size={13} /> : <CheckSquare size={13} />}
+                  <span>
+                    {bulkCreateResult.created} receipt(s) created
+                    {bulkCreateResult.skipped > 0 && `; ${bulkCreateResult.skipped} skipped (already had a receipt, or no longer eligible)`}.
+                  </span>
+                </div>
+              )}
               <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xs w-max max-w-full overflow-x-auto">
                 {TABS.map((tab) => (
                   <button key={tab.key} onClick={() => setActiveTab(tab.key)}
@@ -845,7 +921,11 @@ function AnalysisHistoryPageInner() {
                   <thead className="sticky top-0 z-20 shadow-[0_1px_0_0_rgba(23,46,76,1)]">
                     <tr className="bg-[#222222] text-white">
                       <th className="px-3 py-2.5 bg-[#222222] w-10 text-center">
-                        {ENABLE_BULK_APPROVE && (
+                        {/* Checkbox column now also serves the bulk-create-
+                            receipts action (ready_for_oracle tab), which
+                            ships live independently of ENABLE_BULK_APPROVE
+                            staying off. */}
+                        {(ENABLE_BULK_APPROVE || activeTab === "ready_for_oracle") && (
                           <input type="checkbox"
                             checked={Object.keys(selectedLines).length===activeRows.length && activeRows.length>0}
                             onChange={() => {
@@ -912,7 +992,7 @@ function AnalysisHistoryPageInner() {
                           onClick={() => canOpenRow && router.push(`/analysis-history/row/${line.id}?run_id=${viewingRun.run_id}`)}
                           className={`transition-colors group ${canOpenRow ? "cursor-pointer hover:bg-blue-50/40" : "hover:bg-gray-50/80"} ${selectedLines[line.id]?"bg-blue-50/20":""}`}>
                           <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
-                            {ENABLE_BULK_APPROVE && (
+                            {(ENABLE_BULK_APPROVE || activeTab === "ready_for_oracle") && (
                               <input type="checkbox" checked={!!selectedLines[line.id]}
                                 onChange={() => setSelectedLines((p) => ({...p,[line.id]:!p[line.id]}))}
                                 className="rounded-xs text-[#222222] focus:ring-0 cursor-pointer"/>

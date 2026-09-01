@@ -33,6 +33,8 @@ import {
   ArrowRightLeft,
   Archive,
   Scale,
+  Undo2,
+  FileX,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -58,6 +60,13 @@ const ICON_MAP: Record<string, LucideIcon> = {
   // The single entry point on an overpaid row — a balance, because the decision
   // is about which side the money falls on.
   "scale": Scale,
+  // "reverse_receipt" itself is filtered out of what this component ever
+  // renders (see row/[id]/page.tsx) — it's per-invoice, rendered inline in
+  // AgingSnapshotCard, not a row-level button. Mapped here anyway so a
+  // future caller that DOES pass it through still gets a sane icon
+  // instead of the generic dot fallback.
+  "undo-2": Undo2,
+  "file-x": FileX,
 };
 
 export default function ActionBar({

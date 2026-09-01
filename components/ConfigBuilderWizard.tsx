@@ -85,6 +85,47 @@ const BANK_KEYWORDS = [
 // sub-header label like "Cr" is never mistaken for data), the cell text for a
 // cell, the literal for fixed. Feeds the live value-sanity checks, which are
 // majority-based so one odd value can't trigger a false warning.
+/**
+ * The account numbers an account_number mapping is AMBIGUOUS between — ONE
+ * source value naming several accounts, exactly one of which is this config's
+ * identity. Empty when the mapping is unambiguous. Two shapes qualify:
+ *   "41678876 & 41678884"  — a main + sub-account header cell
+ *   "401310-41678876"      — HSBC UK's sort code + account number
+ *
+ * A CELL is ambiguous whenever it splits into several. A COLUMN is ambiguous
+ * only when EVERY row splits into several AND they all name the SAME set — one
+ * cell shape repeated down the file. A column whose rows name DIFFERENT accounts
+ * is the genuine multi-account file the Account step's fan-out exists for, and is
+ * deliberately left alone.
+ *
+ * The column half of this was missing, and it failed silently: "401310-41678876"
+ * on every row read as a file holding TWO accounts, so the sort code 401310 —
+ * which passes every validation rule, being six digits with no label words — was
+ * onboarded as a bank account in its own right, with its own OU and its own
+ * Oracle receipts. Nothing downstream could catch it; a sort code is shaped
+ * exactly like a short account number.
+ *
+ * Module-level so the wizard shell (which gates Next on it) and the Columns tab
+ * (which renders the picker) share ONE rule instead of two copies that can drift.
+ */
+function ambiguousAccounts(
+  src: FieldSource, columns: string[], rows: string[][],
+  headerRow: number, subHeaderRow: number | null,
+): string[] {
+  if (!src) return [];
+  if (src.type === "cell") {
+    return splitAccounts(String(rows[src.row ?? 0]?.[src.col ?? 0] ?? ""));
+  }
+  if (src.type !== "column") return [];
+  const groups = fieldSampleValues(
+    src, columns, rows, headerRow, subHeaderRow, Number.MAX_SAFE_INTEGER)
+    .map((v) => splitAccounts(v))
+    .filter((g) => g.length > 0);
+  if (groups.length === 0 || !groups.every((g) => g.length > 1)) return [];
+  const first = groups[0].join(" ");
+  return groups.every((g) => g.join(" ") === first) ? groups[0] : [];
+}
+
 function fieldSampleValues(
   src: FieldSource, columns: string[], rows: string[][],
   headerRow: number, subHeaderRow: number | null, max = 8,
@@ -252,8 +293,18 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   // ── Step 7: Save ──────────────────────────────────────────────────────────────
   const [displayName, setDisplayName]     = useState("");
   const [bank, setBank]                   = useState("");
+  // Opt-in relabel of an account that already exists under a DIFFERENT bank name.
+  // Off by default: onboarding a new statement format for a known account must
+  // never silently rename it, since other configs and every past run refer to it.
+  // Sent as AccountAssignment.rename_bank_account.
+  const [renameBankAccount, setRenameBankAccount] = useState(false);
   const [currency, setCurrency]           = useState("");
   const [ouNumber, setOuNumber]           = useState("");
+  // Business Units BEYOND the primary, for an account that receives money
+  // for more than one BU. Single-account path only -- the multi-account
+  // fan-out still assigns one OU per discovered account (see StepSave).
+  // These must already exist; create one on the Accounts & OU's page.
+  const [additionalOus, setAdditionalOus] = useState<string[]>([]);
   // NOTE: there is deliberately no `businessUnit` state. The Business Unit name
   // belongs to the ORGANIZATION UNIT, not to a config or an account — it comes
   // from the OU record when the OU exists, and from newOuDetails when it doesn't
@@ -548,6 +599,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
           bank: bank.trim() || undefined,
           currency: currency.trim() || undefined,
           override_account_validation: overrideAccount,
+          rename_bank_account: renameBankAccount,
         };
       });
     } else if (!ouNumber.trim() || !resolveBU(ouNumber)) {
@@ -576,8 +628,21 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
         recipe,
         bank: bank.trim() || undefined,
         currency: currency.trim() || undefined,
+        // Opt-in relabel of an already-registered account whose bank name differs
+        // -- off unless the user ticked the box on the banner in the Account step.
+        rename_bank_account: renameBankAccount,
         ou_number: (multi ? assignments[accountNumber]?.ou_number ?? "" : ouNumber).trim(),
         business_unit: resolveBU(multi ? assignments[accountNumber]?.ou_number : ouNumber),
+        // Extra BUs for a shared account, each carrying the same three
+        // fields the primary OU does -- so one that has never been onboarded
+        // can be created here rather than having to exist first. Empty means
+        // "leave whatever is already attached" on the backend, so a routine
+        // re-save never silently strips a multi-BU account back to one.
+        additional_ous: multi ? [] : additionalOus.map((ou) => ({
+          ou_number: ou,
+          business_unit: resolveBU(ou),
+          functional_currency: resolveFC(ou) || undefined,
+        })),
         functional_currency: resolveFC(multi ? assignments[accountNumber]?.ou_number : ouNumber) || undefined,
         override_account_validation: overrideAccount,
         created_by: readLoginStub(),
@@ -644,13 +709,12 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const backendAccountOk = testResult?.account_ok !== false;
   const accountValueOk = (!accountFieldReason && !accountIdentityReason && backendAccountOk) || overrideAccount;
 
-  // A single account cell holding multiple joined accounts ("A & B") is
-  // ambiguous — the user must pick one (radios on the Columns tab), which pins
-  // it as a fixed value. Only a CELL is forced; a column legitimately has many.
-  const accountCellAccounts = fieldMappings.account_number.type === "cell"
-    ? splitAccounts(String(activeRows[fieldMappings.account_number.row ?? 0]?.[fieldMappings.account_number.col ?? 0] ?? ""))
-    : [];
-  const accountMixedCellUnresolved = accountCellAccounts.length > 1;
+  // One source value naming several accounts is ambiguous -- the user must pick
+  // which one this config is for (radios on the Columns tab), and picking pins it
+  // as a fixed value. See ambiguousAccounts() for which mappings qualify and why.
+  const accountAmbiguousAccounts = ambiguousAccounts(
+    fieldMappings.account_number, columns, activeRows, headerRow ?? 0, subHeaderRow);
+  const accountMixedCellUnresolved = accountAmbiguousAccounts.length > 1;
 
   // ── Multi-account (Account step) ───────────────────────────────────────────────
   // A COLUMN locator normally finds several accounts in one file. All of the valid
@@ -672,9 +736,17 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   // is required exactly when this is non-empty, and irrelevant otherwise.
   const isNewOU = (ou: string | undefined | null): boolean =>
     !!ou && !availableOUs.find((o) => o.ou_number === ou)?.business_unit;
-  const newOUNumbers = isMultiAccount
-    ? Array.from(new Set(validFoundAccounts.map((a) => assignments[a]?.ou_number).filter(isNewOU) as string[]))
-    : (isNewOU(ouNumber) ? [ouNumber] : []);
+  const newOUNumbers = Array.from(new Set([
+    ...(isMultiAccount
+      ? (validFoundAccounts.map((a) => assignments[a]?.ou_number).filter(isNewOU) as string[])
+      : (isNewOU(ouNumber) ? [ouNumber] : [])),
+    // Additional Business Units are onboarded on exactly the same terms as the
+    // primary: pick one that has never been onboarded and step 3 asks for its
+    // name and ledger currency too. Without this, a new OU chosen as an
+    // ADDITIONAL BU would reach the backend with no currency and be rejected.
+    // Multi-account fan-out has no additional-BU picker, hence single only.
+    ...(isMultiAccount ? [] : additionalOus.filter(isNewOU)),
+  ]));
 
   // Business Unit for an OU: from the OU record when it's already onboarded,
   // otherwise from what the user typed for that NEW OU. Single source of truth,
@@ -696,7 +768,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
   const activeAccountIssue: { message: string; canOverride: boolean } | null =
     step === 3
       ? (accountMixedCellUnresolved
-          ? { message: `This account cell holds ${accountCellAccounts.length} account numbers — select the one this config is for in the Account Number field.`, canOverride: false }
+          ? { message: `The account value holds ${accountAmbiguousAccounts.length} account numbers — select the one this config is for in the Account Number field.`, canOverride: false }
           : accountFieldReason ? { message: accountFieldReason, canOverride: true } : null)
     : step === 5 ? (accountIdentityReason ? { message: accountIdentityReason, canOverride: true } : null)
     : step === 6 ? (testResult?.account_ok === false
@@ -970,6 +1042,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   accountIssues, validFoundAccounts, ignoredFoundAccounts, isMultiAccount,
                   locateTruncated,
                   selectedSheet, duplicateShapeSheets,
+                  knownAccounts, bank, renameBankAccount, setRenameBankAccount,
                 }} />
               )}
               {step === 6 && (
@@ -983,6 +1056,7 @@ export default function ConfigBuilderWizard({ filename, onClose, onSaved }: Prop
                   displayName, setDisplayName,
                   bank, setBank, currency, setCurrency,
                   ouNumber, setOuNumber,
+                  additionalOus, setAdditionalOus,
                   accountNumber, existingFormats,
                   extension: previewData?.extension ?? "xlsx",
                   saving, saveError,
@@ -1643,14 +1717,12 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
     };
   };
 
-  // Accounts found in a single CELL account mapping. Only a cell can be
-  // ambiguous this way — a column legitimately holds many accounts (one per
-  // row), so multiple there is fine and we don't force a pick.
-  const accountCellSplit = (): string[] => {
-    const s = fieldMappings.account_number;
-    if (s.type !== "cell") return [];
-    return splitAccounts(String(activeRows[s.row ?? 0]?.[s.col ?? 0] ?? ""));
-  };
+  // The account numbers this mapping is ambiguous between, if any -- ONE source
+  // value naming several. Shared with the wizard shell (which gates Next on it)
+  // via the module-level ambiguousAccounts(), so the picker rendered here and the
+  // Next-button gate can never disagree about whether a mapping is ambiguous.
+  const accountAmbiguousAccounts = ambiguousAccounts(
+    fieldMappings.account_number, columns, activeRows, hRow, subHeaderRow);
 
   // First real DATA value (after header + sub-header) for the sample display —
   // not activeRows[hRow+1], which is the sub-header row in two-row-header files.
@@ -1742,17 +1814,24 @@ function PreviewColumnMapper({ columns, fieldMappings, setFieldMappings, activeR
               )}
 
               {name === "account_number" && (() => {
-                const cellAccts = accountCellSplit();
-                // A single cell holding multiple joined accounts is ambiguous —
+                const cellAccts = accountAmbiguousAccounts;
+                // ONE source value holding several joined accounts is ambiguous —
                 // force the user to pick exactly one. Picking pins it as a fixed
-                // value so ingest uses that one account (not the mashed cell).
+                // value so ingest uses that one account (not the mashed value).
+                // Covers a mixed CELL ("A & B") and a COLUMN whose every row
+                // repeats the same pair ("401310-41678876") — see
+                // accountAmbiguousAccounts for why a column qualifies.
                 if (cellAccts.length > 1) {
+                  const isCol = fieldMappings.account_number.type === "column";
                   return (
                     <div className="mt-1.5 space-y-1" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-start gap-1 text-[9px] text-amber-700 font-semibold">
                         <AlertTriangle size={10} className="shrink-0 mt-px" />
                         <span className="leading-tight normal-case">
-                          This cell holds {cellAccts.length} account numbers — select the one this config is for:
+                          {isCol
+                            ? `Every row in this column holds the same ${cellAccts.length} account numbers`
+                            : `This cell holds ${cellAccts.length} account numbers`}
+                          {" — select the one this config is for:"}
                         </span>
                       </div>
                       <div className="space-y-0.5 pl-3.5">
@@ -2610,6 +2689,7 @@ function StepLocateAccount({
   locating, locateError, handleLocate, extension,
   accountIssues, validFoundAccounts, ignoredFoundAccounts, isMultiAccount,
   locateTruncated, selectedSheet, duplicateShapeSheets,
+  knownAccounts, bank, renameBankAccount, setRenameBankAccount,
 }: {
   columns: string[];
   activeRows: string[][];
@@ -2631,6 +2711,10 @@ function StepLocateAccount({
   locateTruncated: number;
   selectedSheet: string;
   duplicateShapeSheets: { name: string; rows: number }[];
+  knownAccounts: Record<string, KnownAccountInfo>;
+  bank: string;
+  renameBankAccount: boolean;
+  setRenameBankAccount: (v: boolean) => void;
 }) {
   const t = accountLocator.type;
   const fmt = extension === "txt" ? "csv" : extension === "xlsm" ? "xlsx" : extension;
@@ -2643,6 +2727,24 @@ function StepLocateAccount({
     t === "regex" ? (accountLocator.in?.type === "cell" ? "regex_cell" : "regex_col") : t;
   const isRegex = t === "regex";
   const regexCellValue = String(activeRows[accountLocator.in?.row ?? 0]?.[accountLocator.in?.col ?? 0] ?? "");
+
+  // ── "You are attaching this to an account that already exists" ──────────────
+  // Account identity ignores leading zeros (backend match_key), so a statement
+  // reading "188603500" attaches to an account registered as "00188603500" --
+  // and the STORED form is kept, because that is what Oracle knows and what goes
+  // out as RemittanceBankAccountNumber. That is the right behaviour and it used
+  // to happen with nothing on screen to say so: the only hint was a small "exists
+  // (xlsx)" chip that says nothing about the number being different. Silently
+  // saving under a number the user never typed is exactly the kind of thing that
+  // has to be stated loudly, so it gets a real banner.
+  const pickedKnown = accountNumber ? knownAccounts[accountNumber] : undefined;
+  const registeredNumber = pickedKnown?.registered_account_number ?? null;
+  const numberDiffers = !!registeredNumber && registeredNumber !== accountNumber;
+  const registeredBank = pickedKnown?.bank ?? null;
+  const bankDiffers =
+    !!registeredBank && !!bank.trim() &&
+    registeredBank.trim().toLowerCase() !== bank.trim().toLowerCase();
+  const showExistingBanner = !!pickedKnown && (numberDiffers || bankDiffers);
 
   return (
     <div className="space-y-3">
@@ -2915,6 +3017,74 @@ function StepLocateAccount({
                 </>
               )}
 
+              {/* LOUD: this recipe is being attached to an account that already
+                  exists, under a number and/or a bank name that differ from what
+                  is on screen. See showExistingBanner above for why this is a
+                  banner and not another small chip. */}
+              {showExistingBanner && (
+                <div className="border-2 border-amber-400 bg-amber-50 rounded p-3 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600" />
+                    <div className="text-[12px] text-primary leading-snug">
+                      <div className="font-black uppercase tracking-wider text-[11px] text-amber-800">
+                        This account is already registered
+                      </div>
+                      {numberDiffers && (
+                        <>
+                          <p className="mt-1.5">
+                            Your statement reads{" "}
+                            <span className="font-mono font-bold">{accountNumber}</span>. The same
+                            account is already on file as{" "}
+                            <span className="font-mono font-bold">{registeredNumber}</span> — the
+                            difference is only leading zeros — so this <b>{fmt}</b> recipe is added
+                            to that existing account instead of creating a second one.
+                          </p>
+                          <p className="mt-2 border-l-2 border-amber-500 pl-2">
+                            <b>
+                              Receipts from this file will be posted to Oracle as{" "}
+                              <span className="font-mono">{accountNumber}</span>
+                            </b>
+                            , not <span className="font-mono">{registeredNumber}</span>. The
+                            remittance bank account sent to Oracle is taken from each row as the
+                            statement writes it, not from the registered account — so the same
+                            account can reach Oracle under either spelling depending on which file a
+                            row came from.{" "}
+                            <b>
+                              Check which form Oracle holds for this account before posting.
+                            </b>{" "}
+                            If Oracle only recognises{" "}
+                            <span className="font-mono">{registeredNumber}</span>, correct the
+                            number in the statement file and re-upload it before configuring —
+                            otherwise every receipt from this file will fail.
+                          </p>
+                        </>
+                      )}
+                      {bankDiffers && (
+                        <p className="mt-1.5">
+                          It is on file as <b>{registeredBank}</b>; you entered <b>{bank.trim()}</b>.
+                          The existing name is kept unless you tick the box below.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  {bankDiffers && (
+                    <label className="flex items-start gap-2 text-[11px] cursor-pointer pl-6">
+                      <input
+                        type="checkbox"
+                        checked={renameBankAccount}
+                        onChange={(e) => setRenameBankAccount(e.target.checked)}
+                        className="mt-0.5 cursor-pointer"
+                      />
+                      <span>
+                        Rename this account to <b>{bank.trim()}</b> — this changes it{" "}
+                        <b>everywhere</b>, including for its other statement formats and every past
+                        run.
+                      </span>
+                    </label>
+                  )}
+                </div>
+              )}
+
               {/* Values the locator found that don't look like account numbers —
                   e.g. a "TOTAL" footer row caught by a column locator. Shown so
                   their exclusion is visible, never registered as an account. */}
@@ -3021,6 +3191,7 @@ function StepSave({
   displayName, setDisplayName,
   bank, setBank, currency, setCurrency,
   ouNumber, setOuNumber,
+  additionalOus, setAdditionalOus,
   accountNumber, existingFormats,
   extension,
   saving, saveError,
@@ -3034,6 +3205,7 @@ function StepSave({
   bank: string; setBank: (v: string) => void;
   currency: string; setCurrency: (v: string) => void;
   ouNumber: string; setOuNumber: (v: string) => void;
+  additionalOus: string[]; setAdditionalOus: (v: string[]) => void;
   accountNumber: string;
   existingFormats: Record<string, string[]>;
   extension: string;
@@ -3209,6 +3381,79 @@ function StepSave({
           </div>
         </div>
       </div>
+
+      {/* Additional Business Units — for one account that receives money for
+          more than one BU. Previously this could only be set AFTER onboarding,
+          from the Accounts & OU's page, which made a multi-BU account a
+          two-screen job. Only existing OUs are offered: an additional BU is by
+          definition one this statement is not the source for, so there is
+          nothing here to infer a name or ledger currency from. Create it on the
+          Accounts & OU's page first, then it appears in this list. */}
+      {ouNumber && (
+        <div className="space-y-1.5 mt-4">
+          <label className={`block ${SECTION_LABEL}`}>
+            Additional Business Units
+            <span className="text-gray-400 font-normal normal-case"> (optional)</span>
+          </label>
+          <p className="text-[10px] text-gray-500 leading-snug">
+            Other Business Units this account also receives money for. Picked the same way
+            as the Organization Unit above — including one that has never been onboarded,
+            which you name in step 3 alongside the primary.
+          </p>
+
+          {/* Selected ones, each removable. Rendered as rows rather than chips
+              so a new OU can carry the same "(new — name it in step 3)" note the
+              primary field uses. */}
+          {additionalOus.length > 0 && (
+            <div className="border border-gray-200 rounded-sm divide-y divide-gray-100">
+              {additionalOus.map((ou) => (
+                <div key={ou} className="flex items-center gap-2 px-3 py-1.5 text-[11px]">
+                  <span className="font-mono font-bold text-primary">{ou}</span>
+                  <span className="text-gray-500 truncate">
+                    {resolveBU(ou) || (
+                      <span className="italic text-amber-600">new OU — name it in step 3</span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAdditionalOus(additionalOus.filter((n) => n !== ou))}
+                    aria-label={`Remove ${ou}`}
+                    className="ml-auto text-[10px] font-black uppercase tracking-wider text-gray-400
+                               hover:text-red-600 cursor-pointer shrink-0"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Same control as the Organization Unit select above: pick from every
+              known OU, including aging-report OUs not yet onboarded. Resets to
+              the placeholder after each pick so it reads as "add another". */}
+          <select
+            value=""
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v && !additionalOus.includes(v)) setAdditionalOus([...additionalOus, v]);
+            }}
+            disabled={ousLoading}
+            className="w-full text-xs border border-gray-300 rounded-sm px-3 py-2 bg-white
+                       focus:outline-none focus:border-[#222222] disabled:opacity-50"
+          >
+            <option value="">
+              {additionalOus.length ? "Add another Business Unit…" : "Add a Business Unit…"}
+            </option>
+            {availableOUs
+              .filter((o) => o.ou_number !== ouNumber && !additionalOus.includes(o.ou_number))
+              .map((o) => (
+                <option key={o.ou_number} value={o.ou_number}>
+                  {o.ou_number}{o.business_unit ? ` — ${o.business_unit}` : " — (new, not yet onboarded)"}
+                </option>
+              ))}
+          </select>
+        </div>
+      )}
       </Section>
       )}
 

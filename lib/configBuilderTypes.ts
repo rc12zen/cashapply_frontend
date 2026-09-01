@@ -131,6 +131,13 @@ export interface KnownAccountInfo {
   currency?: string | null;
   ou_number?: string | null;
   business_unit?: string | null;
+  // The account number as ALREADY REGISTERED, which can differ from the one
+  // extracted from the statement by leading zeros: a CSV reading "188603500"
+  // matches an account stored as "00188603500". Saving keeps the STORED form,
+  // because that is the one Oracle knows and the one sent as
+  // RemittanceBankAccountNumber -- so the wizard must show which number the
+  // recipe is actually being attached to, not the text it read out of the file.
+  registered_account_number?: string | null;
 }
 
 export interface LocateAccountResult {
@@ -164,6 +171,9 @@ export interface AccountAssignment {
   bank?: string;
   currency?: string;
   override_account_validation?: boolean;
+  // See SaveRecipePayload.rename_bank_account — same opt-in, per account in a
+  // multi-account fan-out.
+  rename_bank_account?: boolean;
 }
 
 export interface SaveRecipePayload {
@@ -173,8 +183,27 @@ export interface SaveRecipePayload {
   recipe: object;                        // account_locator + source + fields + credit_rule + …
   bank?: string;
   currency?: string;
+  // Explicit opt-in to relabel an account that already exists under a DIFFERENT
+  // bank name. Default false: onboarding a new statement format for a known
+  // account must never silently rename it, since other formats and every past
+  // run refer to that account. Set by the "rename this account" tick on the
+  // Account step's already-registered banner.
+  rename_bank_account?: boolean;
   ou_number: string;
   business_unit: string;
+  // Business Units BEYOND the primary one, for a bank account that receives
+  // money for more than one BU.
+  //
+  // Each carries the same three fields the primary OU does, so one that has
+  // never been onboarded is created here — named and given its ledger currency
+  // in the wizard's new-OU step, exactly like a new primary OU. functional
+  // currency is required only when the OU is genuinely new.
+  //
+  // An empty list means "leave whatever is already attached" on the backend,
+  // NOT "remove them all" — so a routine re-save (new format recipe, corrected
+  // column mapping) can never silently strip a multi-BU account back to one.
+  // Removing an additional BU stays the Accounts & OU's page's job.
+  additional_ous?: { ou_number: string; business_unit: string; functional_currency?: string }[];
   // Ledger/functional currency for this OU — only used if ou_number is
   // genuinely new (see backend's builder_save); falls back to `currency`
   // if omitted. See db config_builder_routes.py's SaveRecipeRequest.

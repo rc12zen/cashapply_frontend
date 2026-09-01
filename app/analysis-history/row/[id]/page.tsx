@@ -61,7 +61,7 @@
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, settlementOverride, parkOverpayment } from "@/lib/api";
+import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, editReceiptFields, settlementOverride, parkOverpayment, reverseReceiptInvoice, deleteReceipt } from "@/lib/api";
 
 import { usePageGuard } from "@/lib/usePageGuard";
 import PageAccessDenied from "@/components/PageAccessDenied";
@@ -83,8 +83,12 @@ import ShortageCard from "@/components/row-detail/ShortageCard";
 import HandleOverpaymentModal from "@/components/row-detail/HandleOverpaymentModal";
 import OracleFusionCard from "@/components/row-detail/OracleFusionCard";
 import EditGlRateModal from "@/components/row-detail/EditGlRateModal";
+import EditReceiptModal from "@/components/row-detail/EditReceiptModal";
 import RejectRowModal from "@/components/row-detail/RejectRowModal";
 import ReopenAndReviewModal from "@/components/row-detail/ReopenAndReviewModal";
+import ReverseReceiptModal from "@/components/row-detail/ReverseReceiptModal";
+import DeleteReceiptModal from "@/components/row-detail/DeleteReceiptModal";
+import DeleteReceiptChoiceModal from "@/components/row-detail/DeleteReceiptChoiceModal";
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -239,6 +243,99 @@ export default function RowDetailPage() {
     setGlRateSaving(false);
   };
 
+  // Unified "Edit Receipt" modal -- account number / OU / receipt method /
+  // rate / dates. See hitl/service.py's edit_receipt_fields().
+  const [editReceiptModalOpen, setEditReceiptModalOpen] = useState(false);
+  const [editReceiptSaving, setEditReceiptSaving] = useState(false);
+  const [editReceiptError, setEditReceiptError] = useState("");
+
+  const handleEditReceiptFields = async (data: Parameters<typeof editReceiptFields>[1]) => {
+    setEditReceiptSaving(true); setEditReceiptError("");
+    try {
+      const res = await editReceiptFields(recordId, data);
+      if (res.data?.validation_warning) {
+        // Non-blocking per the "warn but allow" policy -- still closes the
+        // modal and refreshes, but leaves the warning visible via the
+        // general action-error strip rather than silently dropping it.
+        setActionError(`Saved with a warning: ${res.data.validation_warning}`);
+      }
+      setEditReceiptModalOpen(false);
+      await fetchDetail();
+    } catch (e: any) { setEditReceiptError(formatApiError(e, "Could not update the receipt fields.")); }
+    setEditReceiptSaving(false);
+  };
+
+  // Reverse (per-invoice SOAP unapply) — opened from a specific invoice
+  // row in AgingSnapshotCard, not from the row-level ActionBar (see that
+  // component's ICON_MAP comment). reverseInvoiceNumber doubles as "which
+  // invoice is this modal open for" and "which invoice's inline button
+  // shows a spinner".
+  const [reverseInvoiceNumber, setReverseInvoiceNumber] = useState<string | null>(null);
+  const [reverseBusy, setReverseBusy]   = useState(false);
+  const [reverseError, setReverseError] = useState("");
+
+  const handleOpenReverse = (invoiceNumber: string) => {
+    setReverseError("");
+    setReverseInvoiceNumber(invoiceNumber);
+  };
+
+  const submitReverse = async (comment: string) => {
+    if (!reverseInvoiceNumber) return;
+    setReverseBusy(true); setReverseError("");
+    try {
+      await reverseReceiptInvoice(recordId, reverseInvoiceNumber, comment || undefined);
+      setReverseInvoiceNumber(null);
+      await fetchDetail();
+    } catch (e: any) {
+      setReverseError(formatApiError(e, "Could not reverse this invoice."));
+    }
+    setReverseBusy(false);
+  };
+
+  // Delete Receipt — a confirm-with-reason modal, then (on success) the
+  // Create-New-vs-Discard follow-up. See hitl/service.py::delete_receipt().
+  const [deleteReceiptModalOpen, setDeleteReceiptModalOpen] = useState(false);
+  const [deleteReceiptBusy, setDeleteReceiptBusy]           = useState(false);
+  const [deleteReceiptError, setDeleteReceiptError]         = useState("");
+  const [deleteChoiceOpen, setDeleteChoiceOpen]             = useState(false);
+  const [deletedReceiptNumber, setDeletedReceiptNumber]     = useState<string | null>(null);
+  const [discardBusy, setDiscardBusy]                       = useState(false);
+  const [discardError, setDiscardError]                     = useState("");
+
+  const submitDeleteReceipt = async (comment: string) => {
+    setDeleteReceiptBusy(true); setDeleteReceiptError("");
+    try {
+      const res = await deleteReceipt(recordId, comment || undefined);
+      setDeletedReceiptNumber(res.data?.deleted_receipt_number || null);
+      setDeleteReceiptModalOpen(false);
+      setDeleteChoiceOpen(true);
+      await fetchDetail();
+    } catch (e: any) {
+      setDeleteReceiptError(formatApiError(e, "Could not delete this receipt."));
+    }
+    setDeleteReceiptBusy(false);
+  };
+
+  const handleCreateNewAfterDelete = () => {
+    // No special call — the row's server-recomputed category/
+    // available_actions already reflect the reset (receipt fields
+    // cleared) state from delete_receipt(); the normal Create Receipts /
+    // Approve flow picks it up from here like any other row.
+    setDeleteChoiceOpen(false);
+  };
+
+  const handleDiscardAfterDelete = async (comment: string) => {
+    setDiscardBusy(true); setDiscardError("");
+    try {
+      await discardEntry(recordId, comment || undefined);
+      setDeleteChoiceOpen(false);
+      await fetchDetail();
+    } catch (e: any) {
+      setDiscardError(formatApiError(e, "Could not discard this row."));
+    }
+    setDiscardBusy(false);
+  };
+
   // Manual counterpart to the periodic remittance_recheck_worker — lets a
   // SPOC re-check THIS row on demand ("the customer just told me they
   // sent it") instead of waiting for the next scheduled sweep. Only ever
@@ -276,6 +373,8 @@ export default function RowDetailPage() {
       else if (code === "discard") await handleDiscard();
       else if (code === "settlement_override") await handleSettlementOverride();
       else if (code === "edit_gl_rate") setGlRateModalOpen(true);
+      else if (code === "edit_receipt") setEditReceiptModalOpen(true);
+      else if (code === "delete_receipt") { setDeleteReceiptError(""); setDeleteReceiptModalOpen(true); }
       else if (code === "handle_overpayment") { setParkError(null); setParkModalOpen(true); }
       else if (code === "map_invoice") {
         document.getElementById("manual-mapping-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -349,7 +448,12 @@ export default function RowDetailPage() {
         status={status}
         categoryLabel={detail.category_label}
         recordId={recordId}
-        availableActions={detail.available_actions || []}
+        // "reverse_receipt" is filtered out here — it's per-invoice
+        // (rendered inline in AgingSnapshotCard below via canReverse/
+        // onReverse), not a single row-level button, since a row can have
+        // more than one applied invoice and this action needs to know
+        // WHICH one. See ActionBar.tsx's ICON_MAP comment.
+        availableActions={(detail.available_actions || []).filter((a) => a.code !== "reverse_receipt")}
         onAction={handleAction}
         busyCode={actionLoading || recheckLoading ? busyActionCode : null}
         actionError={actionError}
@@ -395,6 +499,9 @@ export default function RowDetailPage() {
                 bankCurrency={bs.currency}
                 sumRefs={sumRefs}
                 fx={detail.fx}
+                canReverse={(detail.available_actions || []).some((a) => a.code === "reverse_receipt")}
+                reversingInvoice={reverseBusy ? reverseInvoiceNumber : null}
+                onReverse={handleOpenReverse}
               />
             )}
 
@@ -452,6 +559,24 @@ export default function RowDetailPage() {
         />
       )}
 
+      {editReceiptModalOpen && (
+        <EditReceiptModal
+          recordId={recordId}
+          currentAccountNumber={oracle.payload?.RemittanceBankAccountNumber ?? null}
+          currentOuNumber={bs.ou_number ?? null}
+          currentReceiptMethod={oracle.payload?.ReceiptMethod ?? null}
+          currentRate={oracle.payload?.ConversionRate ?? null}
+          isCrossLedger={!!detail.is_cross_ledger}
+          currentReceiptDate={oracle.payload?.ReceiptDate ?? bs.statement_date ?? null}
+          currentAccountingDate={oracle.payload?.AccountingDate ?? null}
+          standardReceiptId={oracle.standard_receipt_id}
+          saving={editReceiptSaving}
+          error={editReceiptError}
+          onCancel={() => { setEditReceiptModalOpen(false); setEditReceiptError(""); }}
+          onSubmit={handleEditReceiptFields}
+        />
+      )}
+
       {detail.overpayment && (
         <HandleOverpaymentModal
           open={parkModalOpen}
@@ -482,6 +607,36 @@ export default function RowDetailPage() {
           recordId={recordId}
           onCancel={() => setReopenModalOpen(false)}
           onDone={fetchDetail}
+        />
+      )}
+
+      {reverseInvoiceNumber && (
+        <ReverseReceiptModal
+          invoiceNumber={reverseInvoiceNumber}
+          saving={reverseBusy}
+          error={reverseError}
+          onCancel={() => { setReverseInvoiceNumber(null); setReverseError(""); }}
+          onSubmit={submitReverse}
+        />
+      )}
+
+      {deleteReceiptModalOpen && (
+        <DeleteReceiptModal
+          saving={deleteReceiptBusy}
+          error={deleteReceiptError}
+          onCancel={() => { setDeleteReceiptModalOpen(false); setDeleteReceiptError(""); }}
+          onSubmit={submitDeleteReceipt}
+        />
+      )}
+
+      {deleteChoiceOpen && (
+        <DeleteReceiptChoiceModal
+          deletedReceiptNumber={deletedReceiptNumber}
+          saving={discardBusy}
+          error={discardError}
+          onClose={() => { setDeleteChoiceOpen(false); setDiscardError(""); }}
+          onCreateNew={handleCreateNewAfterDelete}
+          onDiscard={handleDiscardAfterDelete}
         />
       )}
     </div>
