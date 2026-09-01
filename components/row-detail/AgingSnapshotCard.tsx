@@ -10,12 +10,13 @@
  * Pure presentational, extracted verbatim from
  * app/analysis-history/row/[id]/page.tsx.
  */
-import { CheckCircle2, FileText } from "lucide-react";
+import { CheckCircle2, FileText, Loader2, Undo2 } from "lucide-react";
 import { CardShell, CardHead } from "@/components/row-detail/SharedCardPieces";
 import { ConfirmedInvoice, FxView, fmt, fmtDate } from "@/components/row-detail/types";
 
 export default function AgingSnapshotCard({
   confirmedInvoices, sumOutstanding, creditAmount, bankCurrency, sumRefs, fx,
+  canReverse, reversingInvoice, onReverse,
 }: {
   confirmedInvoices: ConfirmedInvoice[];
   sumOutstanding: number;
@@ -23,6 +24,16 @@ export default function AgingSnapshotCard({
   bankCurrency: string;
   sumRefs: number;
   fx?: FxView;
+  // Receipt reversal — see hitl/service.py::reverse_receipt_invoice().
+  // canReverse mirrors the server-computed "reverse_receipt" action being
+  // in available_actions (row has an active application to unapply);
+  // rendered per-invoice here rather than as a single row-level
+  // ActionBar button, since only ONE invoice is unapplied per call. All
+  // three optional so this card still works standalone wherever it's
+  // used without receipt-reversal context (e.g. distribution entries).
+  canReverse?: boolean;
+  reversingInvoice?: string | null;
+  onReverse?: (invoiceNumber: string) => void;
 }) {
   // sumRefs (allocated) and sumOutstanding are in invoice currency, so the
   // "balanced?" check must compare against the credited amount CONVERTED to
@@ -65,8 +76,8 @@ export default function AgingSnapshotCard({
         <table className="w-full text-[11px]">
           <thead>
             <tr className="bg-[#222222] text-white">
-              {["Invoice #", "Customer", "Invoice Date", "Outstanding", "Currency", "OU", "Allocated"].map(h => (
-                <th key={h} className={`px-4 py-3 text-[9px] font-black uppercase tracking-wider ${h === "Outstanding" || h === "Allocated" ? "text-right" : "text-left"}`}>{h}</th>
+              {["Invoice #", "Customer", "Invoice Date", "Outstanding", "Currency", "OU", "Allocated", ...(canReverse ? ["Action"] : [])].map(h => (
+                <th key={h} className={`px-4 py-3 text-[9px] font-black uppercase tracking-wider ${h === "Outstanding" || h === "Allocated" ? "text-right" : h === "Action" ? "text-center" : "text-left"}`}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -87,6 +98,21 @@ export default function AgingSnapshotCard({
                   <td className="px-4 py-3 text-gray-400 font-mono">{inv.currency || "—"}</td>
                   <td className="px-4 py-3 text-gray-400">{inv.ou_number || "—"}</td>
                   <td className="px-4 py-3 font-mono font-bold text-right text-emerald-700">{fmt(allocated)}</td>
+                  {canReverse && (
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => onReverse?.(inv.invoice_number)}
+                        disabled={reversingInvoice === inv.invoice_number}
+                        title="Unapply this invoice from the receipt (SOAP processUnapplyReceipt) — the receipt itself stays live for reuse"
+                        className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-amber-700 border border-amber-300 bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-xs cursor-pointer disabled:opacity-40"
+                      >
+                        {reversingInvoice === inv.invoice_number
+                          ? <Loader2 size={10} className="animate-spin" />
+                          : <Undo2 size={10} />}
+                        Reverse
+                      </button>
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -101,10 +127,11 @@ export default function AgingSnapshotCard({
                   {fmt(allocatedTotal)}
                   {!balanced && <span className="ml-1.5 text-[9px]">⚠ mismatch</span>}
                 </td>
+                {canReverse && <td />}
               </tr>
               <tr className="bg-blue-50/50">
                 <td colSpan={3} className="px-4 py-2 text-[9px] font-black text-[#222222] uppercase tracking-wider">Bank credit amount</td>
-                <td colSpan={4} className="px-4 py-2 font-mono font-black text-right text-[#222222]">
+                <td colSpan={canReverse ? 5 : 4} className="px-4 py-2 font-mono font-black text-right text-[#222222]">
                   {fmt(creditAmount)} {bankCurrency}
                   {/* Cross-currency: the allocated total above is in invoice
                       currency, so show the credited amount's invoice-currency

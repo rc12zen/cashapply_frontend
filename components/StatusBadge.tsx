@@ -15,6 +15,10 @@ const BADGE_STYLES: Record<string, string> = {
   regex: "bg-blue-100 text-blue-800",
   fuzzy: "bg-indigo-100 text-indigo-800",
   "n/a": "bg-gray-100 text-gray-400",
+  // LineItem.status = "Receipt Reversed" once a row's last applied
+  // invoice is unapplied (see hitl/service.py::reverse_receipt_invoice()) —
+  // amber, distinct from both rejected/red and processed/approved/green.
+  "receipt reversed": "bg-amber-100 text-amber-800",
 }
 
 export default function StatusBadge({ value }: { value: string | null | undefined }) {

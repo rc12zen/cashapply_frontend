@@ -552,9 +552,39 @@ export const reopenDistributionEntry  = (id: number, entryId: string, comment?: 
 export const editDistributionEntryGlRate = (id: number, entryId: string, newRate: number, reason?: string) =>
   API.put(`/api/hitl/distribution-entry-gl-rate/${id}/${entryId}`, { new_rate: newRate, reason });
 // Cross-ledger-currency rows only, before invoice mapping — see
-// hitl/service.py's edit_gl_rate() for the guard.
+// hitl/service.py's edit_gl_rate() for the guard. Superseded by
+// editReceiptFields() below for the Row Detail UI (which now covers this
+// same field plus four more in one modal) — kept for the per-entry
+// distribution-row edit path above, which still targets one field only.
 export const editGlRate          = (id: number, newRate: number, reason?: string) =>
   API.put(`/api/hitl/gl-rate/${id}`, { new_rate: newRate, reason });
+
+// Unified receipt-field edit — account number, OU number, receipt method,
+// GL/currency rate (cross-ledger rows only), and both dates. Any subset of
+// fields may be present; see hitl/service.py's edit_receipt_fields() for
+// the full guard (before invoice mapping only) and the POST-retry/PATCH
+// branch this drives.
+export interface EditReceiptFieldsInput {
+  account_number?: string;
+  ou_number?: string;
+  receipt_method_name?: string;
+  new_rate?: number;
+  receipt_date?: string;      // "YYYY-MM-DD"
+  accounting_date?: string;   // "YYYY-MM-DD"
+  reason?: string;
+}
+export const editReceiptFields = (id: number, fields: EditReceiptFieldsInput) =>
+  API.put(`/api/hitl/receipt-fields/${id}`, fields);
+
+// Read-only, advisory preview of whether an account/OU/receipt-method
+// combination is a real row in receipt_method_map.json — lets the modal
+// show a live warning as the SPOC types, before they submit. Never blocks
+// the save itself (see hitl/service.py's "warn but allow" policy).
+export const checkReceiptFieldsCombo = (
+  id: number, accountNumber: string, ouNumber?: string, receiptMethodName?: string,
+) => API.get(`/api/hitl/receipt-fields-check/${id}`, {
+  params: { account_number: accountNumber, ou_number: ouNumber, receipt_method_name: receiptMethodName },
+});
 export const approveBulk        = (ids: number[])                => API.post("/api/hitl/approve-bulk", { ids });
 export const getHitlHistory     = ()                             => API.get("/api/hitl/history");
 export const retryOracle        = (id: number)                   => API.post(`/api/hitl/retry-oracle/${id}`, {});
@@ -632,6 +662,42 @@ export const approveEntry = (
   API.post(`/api/hitl/approve/${id}`, {
     comment,
     invoice_breakup: invoiceBreakup,
+  });
+
+// ── Receipt lifecycle: deferred creation / reversal / delete ────────────────
+// Receipts are no longer created automatically at analysis time — see the
+// backend's "Step 4.5 REMOVED" change. Creation now happens either here
+// (bulk, Analysis History's "Create Receipts" button, ready_for_oracle rows
+// only) or lazily as step 1 of approveEntry() above.
+export const createReceiptsBulk = (ids: number[]) =>
+  API.post("/api/hitl/create-receipts-bulk", { ids });
+
+// Unapplies ONE invoice from a row's receipt (Oracle SOAP
+// processUnapplyReceipt) — per-invoice, not whole-row. The receipt itself
+// is untouched and stays live for reuse; once the LAST applied invoice on
+// a row is reversed, the row moves to the "Receipt Reversed — Pending
+// Remap" bucket for manual re-mapping (ManualInvoiceMappingCard), which
+// re-applies to the SAME receipt.
+export const reverseReceiptInvoice = (
+  id: number,
+  invoiceNumber: string,
+  comment?: string,
+  expectedVersion?: number,
+) =>
+  API.post(`/api/hitl/reverse-receipt/${id}`, {
+    invoice_number: invoiceNumber,
+    comment,
+    expected_version: expectedVersion,
+  });
+
+// Deletes a row's Oracle receipt entirely (REST DELETE) — only allowed
+// once it has no active invoice application (i.e. after a full reversal,
+// or a receipt that was created but never mapped). On success the row's
+// receipt fields are cleared and it's eligible for a fresh receipt again.
+export const deleteReceipt = (id: number, comment?: string, expectedVersion?: number) =>
+  API.post(`/api/hitl/delete-receipt/${id}`, {
+    comment,
+    expected_version: expectedVersion,
   });
 
 /**
