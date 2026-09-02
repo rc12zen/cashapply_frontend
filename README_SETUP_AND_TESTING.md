@@ -1,112 +1,144 @@
 # CashApply Frontend — Setup & Testing Guide
 
-This is your original `ss2/` UI plus the missing Next.js project scaffold
-(`package.json`, `tsconfig.json`, `next.config.js`, `tailwind.config.js`,
-`postcss.config.js`) and the wiring needed to actually exercise the
-backend's new auth/RBAC/duplicate-detection features. It has been installed
-and production-built successfully in a clean environment (`npm install &&
-npm run build` — zero errors) as part of preparing this delivery.
+Next.js (App Router) frontend for CashApply. Talks to the backend over
+`NEXT_PUBLIC_API_BASE_URL`, using either a local dev-bypass login (no real
+Azure needed) or real Azure AD SSO via MSAL depending on
+`NEXT_PUBLIC_APP_ENV`.
 
-## What changed vs. the original `ss2/` you gave me
+Follow this top to bottom on a clean checkout, with the backend already
+running (see `cashapply_backend/README_SETUP_AND_TESTING.md`), and you'll
+have a working local instance you can log into.
 
-- **`lib/api.ts`** — every request now sends the existing login cookie
-  (`login_user_email_stub`, already set by `app/page.tsx`'s sign-in form) as
-  an `X-Dev-User` header. This is what the backend's dev SSO bypass reads
-  (see backend design doc §1.3) — the login screen was previously
-  decorative (no backend auth existed); now it's a real, working local
-  identity. A 401 response redirects back to `/`. Added `getMe()` and
-  `getIngestStatus()`.
-- **`app/layout.tsx`** — header now shows the role the backend actually
-  resolved for the current user (fetched from `/api/auth/me`), so it's
-  obvious during testing which permission set is in effect.
-- **`app/page.tsx`** — comment update only, clarifying the cookie's real
-  role now; no behavior change.
-- **`app/home/page.tsx`** — upload flow now handles the two new backend
-  response shapes: an actionable duplicate-file banner (§2.1) with a link
-  to the existing run, and polling for `ingest_status` per file
-  (Processing → Ready, with new/duplicate row counts) instead of assuming
-  the file is immediately analyzable.
-- **`app/analysis-history/page.tsx`, `app/shortage-review/page.tsx`** —
-  unrelated pre-existing build bug fixed (`useSearchParams()` needs a
-  `Suspense` boundary for static export in this Next.js version) — this was
-  already broken in what you gave me, not something the backend work
-  introduced; fixed it since it blocked `npm run build`.
-- **New project scaffold files** (`package.json`, `tsconfig.json`,
-  `next.config.js`, `tailwind.config.js`, `postcss.config.js`,
-  `next-env.d.ts`) — the zip I received didn't include these, so the app
-  couldn't `npm install`/build at all before.
+## Prerequisites
 
-## 1. Install & run
+| Tool | Version used | Notes |
+|---|---|---|
+| Node.js | **24** | `node -v`. Node 20+ should work (see `@types/node` in `package.json`), but 24 is what this checkout was verified against. |
+| npm | **11** | `npm -v`. Ships with Node 24. |
+| Backend | running first | See `cashapply_backend/README_SETUP_AND_TESTING.md` — the frontend has nothing to talk to without it. |
+
+## 1. Install dependencies
 
 ```bash
 npm install
+```
+
+## 2. Configure environment
+
+```bash
+copy .env.example .env.local        # Windows
+cp .env.example .env.local          # macOS/Linux
+```
+
+Then edit `.env.local`:
+
+- **`NEXT_PUBLIC_API_BASE_URL`** — leave as `http://localhost:8000` if the
+  backend is running locally on the default port.
+- **`NEXT_PUBLIC_API_ENCRYPTION_KEY`** — **must exactly match** the
+  backend's `API_ENCRYPTION_KEY` for the same environment (backend README
+  §4). The example file ships a sample value that matches
+  `backend.env.local.example`'s intended pairing — but that file doesn't
+  actually define `API_ENCRYPTION_KEY`, so generate a real pair instead of
+  relying on the sample:
+  ```bash
+  cd ../cashapply_backend
+  python -m scripts.gen_api_key
+  ```
+  Copy the `API_ENCRYPTION_KEY=...` line into the backend's `.env` and the
+  `NEXT_PUBLIC_API_ENCRYPTION_KEY=...` line into this file's `.env.local`.
+  **This value is inlined at build time** — changing it means restarting
+  `next dev` (dev server re-reads env on restart) or rebuilding for
+  production. If you'd rather run plaintext locally, leave this blank
+  **and** set `API_ENCRYPTION_ENABLED=false` on the backend — changing only
+  one side breaks every request.
+- **`NEXT_PUBLIC_APP_ENV`** — leave as `local`. This selects the
+  `X-Dev-User` cookie bypass login screen instead of real MSAL Azure
+  sign-in (see §5 for switching to real Azure SSO).
+- Azure SSO variables (`NEXT_PUBLIC_AZURE_*`) — leave commented out/blank
+  for local dev; only needed when `NEXT_PUBLIC_APP_ENV` is `uat` or `prod`.
+
+## 3. Run the dev server
+
+```bash
 npm run dev
 ```
 
-Visit `http://localhost:3000`. Requires the backend running at
-`http://localhost:8000` (see the backend zip's own README) — `lib/api.ts`
-hardcodes that base URL, same as your original.
+Visit `http://localhost:3000`.
 
-## 2. Log in via the dev bypass
+## 4. Log in via the dev bypass
 
-The login screen still just takes an email (no real password check — same
-as before). Use one of the emails you seeded on the backend:
+The login screen takes an email (no password — this is the local test
+path only). Use one of the users seeded on the backend
+(`cashapply_backend/README_SETUP_AND_TESTING.md` §6), e.g.:
 
 ```bash
 # on the backend, if you haven't already:
-python3 -m scripts.seed_rbac --dev-user admin@example.com --dev-role Administrator
-python3 -m scripts.seed_rbac --dev-user analyst@example.com --dev-role Analyst
+python -m scripts.seed_rbac --dev-user you@example.com --dev-role Administrator
 ```
 
-Sign in with `admin@example.com` — the header should show a role badge
-reading **ADMINISTRATOR** within a second (fetched live from `/api/auth/me`).
-Sign out, sign back in with `analyst@example.com` — badge should read
-**ANALYST**.
+Sign in with `you@example.com` — the header should show a role badge
+(e.g. **ADMINISTRATOR**) within a second, fetched live from
+`/api/auth/me`. If the email isn't a seeded user, every API call 401s and
+you're bounced back to `/` — that's `lib/api.ts`'s interceptor working as
+intended, not a bug.
 
-If the email you type isn't a seeded user, every API call will 401 and
-you'll be bounced back to `/` — that's the interceptor in `lib/api.ts`
-working as intended, not a bug.
+## 5. Testing flows
 
-## 3. Test duplicate-file detection in the UI
+**Duplicate-file detection:**
+1. Sign in, go to Home, upload any bank statement file.
+2. Upload the **exact same file again** — expect an amber banner: *"...
+   was already uploaded by ... on ... — View existing run →"*, not a
+   generic error toast.
 
-1. Sign in as `analyst@example.com`.
-2. On the Home page, upload any bank statement file.
-3. Upload the **exact same file again**. You should see an amber banner:
-   *"... was already uploaded by analyst@example.com on ... — View existing
-   run →"* — not a generic error toast.
+**Processing → ready flow:**
+After a non-duplicate upload, the file row should show a blue
+**Processing** badge, then flip to a green **Ready (N new)** badge within
+a few seconds — this needs the backend's worker process actually running
+(backend README §8, terminal 2). If a prior statement had overlapping
+rows, the badge/tooltip shows how many duplicate rows were skipped.
 
-## 4. Test the processing → ready flow
+**Role-gated actions:**
+Sign in as a user with only the Analyst role and try to approve a HITL
+row — the Approve button calls `/api/hitl/approve/{id}`, which requires
+`oracle:post` (Analyst doesn't have it) — expect a 403 error toast. Sign
+in as an Administrator (`*`) and the same action should succeed. See
+`RBAC_AND_LOGGING.md` (backend repo) for the full permission matrix.
 
-After a non-duplicate upload, the file row should show a blue **Processing**
-badge, then flip to a green **Ready (N new)** badge within a few seconds
-(this depends on the backend's procrastinate worker process actually
-running — see the backend README §7). If you uploaded a statement with
-overlapping rows from a prior file, the badge's tooltip / the success toast
-will show how many duplicate rows were skipped.
+**RBAC page guards:**
+Every page calls a permission guard and shows a clean "access denied"
+message instead of its content if the signed-in user's role(s) lack that
+permission — try navigating directly to a page your test user shouldn't
+have (e.g. Users tab as a non-Administrator).
 
-## 5. Test role-gated actions
+## 6. Real Azure AD SSO (UAT/prod)
 
-Sign in as `analyst@example.com` and try to approve a HITL row — the
-Approve button calls `/api/hitl/approve/{id}`, which now requires
-`oracle:post`. Analyst doesn't have it, so this should surface a 403 error
-toast. Sign in as `admin@example.com` (has `*`) and the same action should
-succeed.
+The dev-bypass login above is local-only. For real "Sign in with
+Microsoft" via MSAL — environment variables, Azure App Registration
+checklist, and how the pieces fit together — see `AZURE_SSO_SETUP.md` in
+this repo.
 
-## 6. What's NOT done here (being upfront)
+## 7. Production build
 
-- **No real Azure MSAL integration.** This wiring is the *local test path*
-  only (X-Dev-User header). Production Azure Entra ID login (MSAL redirect
-  flow, real bearer tokens, no password field) is a separate, not-yet-built
-  piece — say the word and I'll build `app/page.tsx`'s real-SSO version next.
-- **No hard gate on "Start Analysis" until ingest_status is ready.** The
-  badge shows status, but the button isn't disabled while processing — the
-  backend will just find zero unconsumed rows for a file still mid-ingest,
-  which is safe but not the smoothest UX. Easy follow-up if you want it.
-- **`version_conflict` (optimistic locking) isn't specifically surfaced in
-  the UI yet** — it'll show as a generic error toast via the existing catch
-  block, not a dedicated "someone else already acted on this row, refresh"
-  message.
-- **`app/activity-log/page.tsx` still isn't wired to the real
-  `/api/activity-log` endpoint** — it was already on mock data before this
-  change and I left it that way to keep this delivery scoped; the backend
-  route is ready whenever you want that page wired up.
+```bash
+npm run build
+npm run start
+```
+
+`npm run build` should complete with zero errors on a clean checkout — if
+it doesn't, that's a real regression, not an expected gap.
+
+## 8. Lint / type-check
+
+```bash
+npm run lint
+npx tsc --noEmit
+```
+
+## 9. Known gaps
+
+- **`app/activity-log/page.tsx`** — confirm against the backend's
+  `/api/activity-log` route before relying on it; historically this page
+  lagged the real endpoint during earlier deliveries.
+- **No automated frontend test suite** — testing today is the manual flow
+  in §5 plus `npm run build` / `npm run lint` / `tsc --noEmit` as
+  correctness gates.

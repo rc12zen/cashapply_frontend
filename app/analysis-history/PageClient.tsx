@@ -58,7 +58,7 @@ import {
   ShieldCheck, Sparkles, User, X, HelpCircle, Ban,
   Split, TrendingDown, Trash2, TrendingUp, Archive, RotateCcw,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import StatusBadge from "@/components/StatusBadge";
@@ -103,6 +103,11 @@ interface AnalysisRun {
   total_short_payment:   number;   // R9b + R9d — one-click-approve eligible, own bucket now
   total_needs_distribution: number; // R16/R17/R18 — card/cheque/third-party, awaiting Split & Map
   total_discarded:      number;    // unidentified rows a SPOC judged not a real receivable
+  // NEW — cross-cutting count: every row still without an Oracle receipt
+  // (across unidentified/needs_remittance/needs_distribution/ready_for_oracle/
+  // short_payment/conflict_exception/rejected/post_failed), excluding
+  // Discarded. See bff/metrics.py's NO_RECEIPT_GROUPS.
+  total_no_receipt:    number;
   // Legacy fields — kept for CSV export / backward compatibility, no longer
   // displayed in the run-list table itself.
   total_matched:       number;
@@ -143,6 +148,12 @@ interface RunMetrics {
   // A row whose LAST applied invoice was unapplied (SOAP
   // processUnapplyReceipt) — receipt still live, pending manual remap.
   receipt_reversed:    number;
+  // NEW — cross-cutting aggregate tab: every row still without a receipt,
+  // across every group above except Discarded. See bff/metrics.py's
+  // GROUP_NO_RECEIPT / NO_RECEIPT_GROUPS. A row here also still shows up
+  // in its own normal group's tab — this is a read-only worklist view,
+  // not a 15th mutually-exclusive bucket.
+  no_receipt:          number;
 }
 
 interface LineItem {
@@ -173,6 +184,12 @@ interface LineItem {
   oracle_transaction_ref:  string | null;
   oracle_post_status:      string | null;
   oracle_post_message:     string | null;
+  // NEW — the actual "does a receipt exist" fact (Oracle's numeric
+  // StandardReceiptId). Truthy only once a bare receipt has really been
+  // created — drives Discard-button visibility below, mirroring the
+  // backend's own eligibility check (hitl/actions_registry.py's
+  // _cond_discardable / hitl/service.py's _guard_discardable_row).
+  standard_receipt_id:     string | null;
   remittance_status:       string | null;
   tds_pct_computed:        number | null;
   // State-machine fields (cashapply-backend enums.py: ReasonCode, RowState)
@@ -206,7 +223,10 @@ type TabKeyNoAll =
   | "rejected"
   | "post_failed"
   | "discarded"
-  | "receipt_reversed";
+  | "receipt_reversed"
+  // NEW — cross-cutting aggregate tab only; a row's own `category` field
+  // never actually equals this (see GROUP_NO_RECEIPT in bff/metrics.py).
+  | "no_receipt";
 
 type TabKey = "all" | TabKeyNoAll;
 
@@ -263,6 +283,26 @@ function AnalysisHistoryPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [viewingRun, setViewingRun] = useState<AnalysisRun | null>(null);
+  // See the run_id-restore effect below for the full story — this only
+  // suppresses the ONE redundant reload right after the "View" button's
+  // own click already loaded the run synchronously; every other arrival
+  // (including returning from the row-detail page) always reloads fresh.
+  const justLoadedRunIdRef = useRef<number | null>(null);
+  // BUGFIX: bumped every time loadRunDetail() starts a fresh load — used
+  // as the `key` on the Run Detail view below, forcing React to fully
+  // tear down and rebuild that subtree's DOM on every visit. Without
+  // this, returning from the row-detail page's Back button (a soft
+  // client-side navigation, not a hard reload) could leave the PREVIOUS
+  // render of this same subtree's DOM/event-handlers still attached
+  // underneath the freshly-rendered one — data refetches correctly
+  // (tabData/runMetrics are real component state, so the tab COUNT
+  // badges show fresh numbers), but a click on a tab button could land
+  // on the stale, detached copy instead of the live one, so the table
+  // never visibly updates. A hard refresh or a full round trip back
+  // through the run list (both force a genuine new mount) "fixed" it
+  // for the same reason — this key achieves the same clean rebuild
+  // without needing either.
+  const [viewKey, setViewKey] = useState(0);
 
   // History list
   const [timePeriod, setTimePeriod]               = useState("Latest");
@@ -342,6 +382,12 @@ function AnalysisHistoryPageInner() {
   useEffect(() => { doLoadRuns("Latest", "", ""); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadRunDetail = useCallback(async (run: AnalysisRun) => {
+    // BUGFIX: force a fresh remount of the whole Run Detail subtree (see
+    // viewKey declaration above) every time a run is (re)loaded, so any
+    // stale/disconnected DOM+handlers left behind by a prior soft
+    // client-side navigation (e.g. Back from the row-detail page) can
+    // never intercept clicks on the tab buttons.
+    setViewKey((k) => k + 1);
     setLoading(true);
     setRunMetrics(null); setTabData({} as any); setAllRows([]);
     setActiveTab("all"); setSearchNarrative("");
@@ -355,21 +401,60 @@ function AnalysisHistoryPageInner() {
       // PATCH: "All" = every row across every backend bucket, not just
       // matched+not_found — otherwise rows in ready_for_oracle/processed/etc
       // would silently disappear from the "All" tab and CSV export.
-      const all: LineItem[] = Object.values(data.tabs as Record<string, { rows?: LineItem[] }>)
-        .flatMap((bucket) => bucket?.rows || []);
-      setAllRows(all);
+      //
+      // BUGFIX: de-duplicated by row id. `data.tabs` is no longer a set of
+      // mutually-exclusive buckets — bff/metrics.py adds CROSS-CUTTING
+      // aggregate tabs (currently `no_receipt`) whose rows are the same rows
+      // already present in their own group's bucket, by design. Flattening
+      // blindly therefore listed every receipt-less row TWICE, which:
+      //   - inflated the "All" count and the CSV export, and
+      //   - put duplicate `key={line.id}` children in one list, so React's
+      //     reconciliation from the "All" render could reuse the wrong nodes
+      //     when switching to another tab — the table kept showing the
+      //     previous tab's rows, which read as "the filter isn't working".
+      // Keyed on id rather than skipping known aggregate names so any future
+      // cross-cutting tab is absorbed here without reintroducing this.
+      const byId = new Map<number, LineItem>();
+      for (const bucket of Object.values(data.tabs as Record<string, { rows?: LineItem[] }>)) {
+        for (const row of bucket?.rows || []) byId.set(row.id, row);
+      }
+      setAllRows([...byId.values()]);
     } catch {}
     setLoading(false);
   }, []);
 
-  // Restore the run detail view when arriving via ?run_id=... (e.g. the
-  // back button from a row detail page) so the user lands back on the
-  // same run instead of the bare history list.
+  // BUGFIX: this effect used to skip re-loading whenever
+  // `viewingRun.run_id === runId` — meant to avoid a redundant re-fetch
+  // right after the "View" button's own onClick already called
+  // loadRunDetail() directly (that click also pushes ?run_id=..., which
+  // re-triggers this same effect a moment later). But that guard also
+  // skipped the reload on the FIRST-EVER legitimate reason to land here
+  // with an unchanged run_id: returning from the row-detail page's "Back"
+  // button (app/analysis-history/row/[id]/page.tsx pushes back to this
+  // exact ?run_id=). Since `viewingRun` state is what actually stayed
+  // populated across that round trip, this branch went "already viewing
+  // this run, nothing to do" and never refreshed tabData/runMetrics —
+  // leaving the Line Items Ledger showing whatever was loaded BEFORE the
+  // visit to the row (stale groups/counts), which is exactly why clicking
+  // a different group tab afterward looked like it "wasn't filtering":
+  // tabData itself had gone stale, not the tab-click logic.
+  //
+  // FIX: only skip the ONE specific case this guard was meant for — a
+  // load this SAME click already just triggered synchronously — tracked
+  // via justLoadedRunIdRef, set by the "View" button right before it
+  // calls loadRunDetail() itself and consumed (reset to null) the first
+  // time this effect sees it. Every OTHER arrival with a run_id
+  // (a fresh visit, or returning from the row-detail page) now always
+  // reloads fresh, exactly like landing on the page for the first time.
   useEffect(() => {
     const runIdParam = searchParams.get("run_id");
     if (!runIdParam) return;
     const runId = Number(runIdParam);
-    if (!runId || (viewingRun && viewingRun.run_id === runId)) return;
+    if (!runId) return;
+    if (justLoadedRunIdRef.current === runId) {
+      justLoadedRunIdRef.current = null;
+      return;
+    }
 
     let cancelled = false;
     (async () => {
@@ -446,7 +531,7 @@ function AnalysisHistoryPageInner() {
   // PATCH: tabs now index straight into the backend's per-category buckets —
   // no frontend re-derivation needed. "All" still aggregates everything.
   const activeRows: LineItem[] = useMemo(() => {
-    let rows: LineItem[] = activeTab === "all" ? allRows : (tabData[activeTab]?.rows || []);
+    const rows: LineItem[] = activeTab === "all" ? allRows : (tabData[activeTab]?.rows || []);
     if (!searchNarrative) return rows;
     const q = searchNarrative.toLowerCase();
     return rows.filter((l) => l.narrative?.toLowerCase().includes(q) || String(l.id).includes(q));
@@ -534,7 +619,7 @@ function AnalysisHistoryPageInner() {
   const exportHistoryPdf = async () => {
     if (!filteredRuns.length) return;
     const { downloadTablePdf } = await import("@/lib/pdf");
-    const headers = ["Time", "Account Statement(s)", "Bank(s)", "BU(s)", "Run By", "Total Rows", "Identified", "Unidentified", "Needs Distribution", "Ready for Oracle", "Short Payment", "Discarded", "Status"];
+    const headers = ["Time", "Account Statement(s)", "Bank(s)", "BU(s)", "Run By", "Total Rows", "Identified", "Unidentified", "Needs Distribution", "Ready for Oracle", "Short Payment", "No Receipt Created", "Discarded", "Status"];
     const rows = filteredRuns.map((r) => [
       formatDate(r.started_at),
       (r.selected_files || []).join(", "),
@@ -547,6 +632,7 @@ function AnalysisHistoryPageInner() {
       (r.total_needs_distribution || 0).toLocaleString(),
       (r.total_ready_for_oracle || 0).toLocaleString(),
       (r.total_short_payment || 0).toLocaleString(),
+      (r.total_no_receipt || 0).toLocaleString(),
       (r.total_discarded || 0).toLocaleString(),
       r.status,
     ]);
@@ -578,6 +664,9 @@ function AnalysisHistoryPageInner() {
   // never re-derived client-side.
   const TABS: { key: TabKey; label: string; count: number }[] = [
     { key: "all",                 label: "All",                  count: m?.total_rows ?? 0 },
+    // NEW — cross-cutting worklist: every row across the groups below that
+    // still has no Oracle receipt, minus Discarded. See RunMetrics.no_receipt.
+    { key: "no_receipt",          label: "No Receipt Created",   count: m?.no_receipt ?? 0 },
     { key: "unidentified",        label: "Unidentified",         count: m?.unidentified ?? 0 },
     { key: "needs_remittance",    label: "Needs Remittance",     count: m?.needs_remittance ?? 0 },
     { key: "needs_distribution",  label: "Needs Distribution",   count: m?.needs_distribution ?? 0 },
@@ -674,15 +763,15 @@ function AnalysisHistoryPageInner() {
             <table className="w-full text-left border-collapse min-w-[1100px]">
               <thead className="sticky top-0 z-20 shadow-[0_1px_0_0_rgba(23,46,76,1)]">
                 <tr className="bg-[#222222] text-white">
-                  {["Time","Account Statement(s)","Bank(s)","BU(s)","Run By","Total Rows","Identified","Unidentified","Needs Distribution","Ready for Oracle","Short Payment","Discarded","Status"].map((h) => (
+                  {["Time","Account Statement(s)","Bank(s)","BU(s)","Run By","Total Rows","Identified","Unidentified","Needs Distribution","Ready for Oracle","Short Payment","No Receipt Created","Discarded","Status"].map((h) => (
                     <th key={h} className="px-3 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#222222]">{h}</th>
                   ))}
                   <th className="sticky right-0 z-30 px-4 py-2.5 text-[10px] font-black uppercase tracking-wider bg-[#222222] border-l border-[#000000] text-center w-24 shadow-[-2px_0_4px_rgba(0,0,0,0.1)]">View</th>
                 </tr>
               </thead>
               <tbody className="text-[11px] divide-y divide-gray-200 font-medium text-gray-700 bg-white">
-                {loading && <tr><td colSpan={11} className="text-center py-12 text-xs text-gray-400">Loading runs…</td></tr>}
-                {!loading && filteredRuns.length === 0 && <tr><td colSpan={11} className="text-center py-12 text-xs text-gray-400">No runs found.</td></tr>}
+                {loading && <tr><td colSpan={12} className="text-center py-12 text-xs text-gray-400">Loading runs…</td></tr>}
+                {!loading && filteredRuns.length === 0 && <tr><td colSpan={12} className="text-center py-12 text-xs text-gray-400">No runs found.</td></tr>}
                 {filteredRuns.map((r) => (
                   <tr key={r.run_id} className="hover:bg-gray-50/80 transition-colors group">
                     <td className="px-3 py-3 whitespace-nowrap font-mono text-gray-500">{formatDate(r.started_at)}</td>
@@ -698,6 +787,7 @@ function AnalysisHistoryPageInner() {
                     <td className="px-3 py-3 text-right font-bold font-mono text-indigo-500">{(r.total_needs_distribution||0).toLocaleString()}</td>
                     <td className="px-3 py-3 text-right font-bold font-mono text-blue-600">{(r.total_ready_for_oracle||0).toLocaleString()}</td>
                     <td className="px-3 py-3 text-right font-bold font-mono text-orange-500">{(r.total_short_payment||0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right font-bold font-mono text-rose-500">{(r.total_no_receipt||0).toLocaleString()}</td>
                     <td className="px-3 py-3 text-right font-bold font-mono text-gray-500">{(r.total_discarded||0).toLocaleString()}</td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-xs px-2 py-0.5 border ${r.status==="completed"?"bg-emerald-50 text-emerald-700 border-emerald-200":r.status==="running"?"bg-blue-50 text-blue-700 border-blue-200":"bg-red-50 text-red-700 border-red-200"}`}>
@@ -705,7 +795,7 @@ function AnalysisHistoryPageInner() {
                       </span>
                     </td>
                     <td className="sticky right-0 bg-white group-hover:bg-gray-50 px-4 py-2 border-l border-gray-100 text-center z-10">
-                      <button onClick={() => { setViewingRun(r); setSelectedLines({}); loadRunDetail(r); router.push(`/analysis-history?run_id=${r.run_id}`); }}
+                      <button onClick={() => { setViewingRun(r); setSelectedLines({}); justLoadedRunIdRef.current = r.run_id; loadRunDetail(r); router.push(`/analysis-history?run_id=${r.run_id}`); }}
                         className="inline-flex items-center gap-1 bg-[#222222] hover:bg-[#222222] text-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-xs shadow-xs transition-colors cursor-pointer">
                         <Eye size={11}/><span>View</span>
                       </button>
@@ -728,7 +818,20 @@ function AnalysisHistoryPageInner() {
   if (!allowed) return <PageAccessDenied />;
 
   return (
-    <>
+    // BUGFIX: `key={viewKey}` forces React to fully tear down and rebuild
+    // this entire Run Detail subtree (including every tab button's DOM
+    // node and click handler) each time loadRunDetail() runs. Without
+    // this, returning here via a soft client-side navigation (e.g. the
+    // row-detail page's Back button) could leave the PREVIOUS render's
+    // DOM/handlers for this subtree still attached underneath the
+    // freshly-rendered one — data refetches correctly (so tab count
+    // badges show fresh numbers), but a click on a tab button could land
+    // on the stale, detached copy instead of the live one, so the table
+    // never visibly updated. A hard refresh or a full round trip back
+    // through the run list both force a genuine new mount, which is why
+    // those "fixed" it — this key achieves the same clean rebuild on
+    // every visit without needing either.
+    <Fragment key={viewKey}>
       {breakupLine && breakupAnalysis && (
         <BreakupModal analysis={breakupAnalysis} onConfirm={handleBreakupConfirm}
           onCancel={() => { setBreakupLine(null); setBreakupAnalysis(null); }} isPosting={breakupPosting} />
@@ -804,6 +907,7 @@ function AnalysisHistoryPageInner() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-shrink-0">
               {[
                 { label:"Total Rows",          value:m?.total_rows         ??0, sub:"All statement rows",                          icon:<Layers size={12} className="text-[#222222]"/>,  color:"text-gray-400"    },
+                { label:"No Receipt Created",  value:m?.no_receipt         ??0, sub:"Still no Oracle receipt — excludes Discarded", icon:<Ban size={12}/>,                                 color:"text-rose-500"    },
                 { label:"Unidentified",        value:m?.unidentified       ??0, sub:"No customer or invoice signal",               icon:<HelpCircle size={12}/>,                          color:"text-red-500"     },
                 { label:"Needs Remittance",    value:m?.needs_remittance   ??0, sub:"Customer found, awaiting remittance/invoice", icon:<Calendar size={12}/>,                            color:"text-amber-500"   },
                 { label:"Needs Distribution",  value:m?.needs_distribution ??0, sub:"Credit card / cheque / third-party — awaiting Split & Map", icon:<Split size={12}/>,             color:"text-indigo-500"  },
@@ -1058,6 +1162,6 @@ function AnalysisHistoryPageInner() {
           </div>
         </div>
       </div>
-    </>
+    </Fragment>
   );
 }

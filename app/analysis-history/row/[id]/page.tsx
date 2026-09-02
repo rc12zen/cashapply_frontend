@@ -59,7 +59,7 @@
  *    name, regardless of what's sent).
  */
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { approveEntry, rejectEntry, retryOracle, getRowDetail, recheckRemittance, markEligible, discardEntry, editGlRate, editReceiptFields, settlementOverride, parkOverpayment, reverseReceiptInvoice, deleteReceipt } from "@/lib/api";
 
@@ -95,7 +95,6 @@ import DeleteReceiptChoiceModal from "@/components/row-detail/DeleteReceiptChoic
 export default function RowDetailPage() {
   const { allowed, checking } = usePageGuard("run:view");
   const params       = useParams();
-  const router       = useRouter();
   const searchParams = useSearchParams();
   const recordId     = Number(params?.id);
   const runIdParam   = searchParams.get("run_id");
@@ -119,9 +118,29 @@ export default function RowDetailPage() {
   // Auto-open remittance panel when one was found
   useEffect(() => { if (detail?.remittance) setRemittanceCollapsed(false); }, [detail?.remittance]);
 
+  // BUGFIX (2026-09-02): returning to /analysis-history from here via
+  // `router.push` — a soft, client-side App Router navigation — is the
+  // actual root cause of "clicking a group tab does nothing after coming
+  // back from a row". Next's App Router keeps a client-side Router Cache
+  // per route+search-params combo so back/forward feels instant; landing
+  // back on `/analysis-history?run_id=...` (a URL/segment it has already
+  // rendered once, right before we navigated away to this row) can reuse
+  // that cached render instead of doing a genuine fresh mount. The list
+  // page's OWN data (tab counts) still refreshes correctly, because that
+  // comes from its own effect re-fetching on the `run_id` search-param
+  // change — but the tab BUTTONS' click wiring is tied to whatever
+  // instance Next decided to reuse, which is why clicks can silently stop
+  // doing anything even though the numbers look fresh. A real hard reload
+  // (F5) or a full round trip through the plain run list — both of which
+  // never hit that cached, same-URL case — reliably "fixed" it, which is
+  // the same clue in reverse. So instead of a soft `router.push` back to
+  // the exact URL Next has already cached, force a real full-page
+  // navigation here (same effect as a hard refresh): this always produces
+  // a brand-new mount with correctly wired click handlers, at the cost of
+  // one real page load instead of an instant client transition.
   const goBack = () => {
-    if (runIdParam) router.push(`/analysis-history?run_id=${runIdParam}`);
-    else router.back();
+    if (runIdParam) window.location.assign(`/analysis-history?run_id=${runIdParam}`);
+    else window.location.assign("/analysis-history");
   };
 
   const handleApprove = async () => {
