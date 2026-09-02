@@ -401,9 +401,24 @@ function AnalysisHistoryPageInner() {
       // PATCH: "All" = every row across every backend bucket, not just
       // matched+not_found — otherwise rows in ready_for_oracle/processed/etc
       // would silently disappear from the "All" tab and CSV export.
-      const all: LineItem[] = Object.values(data.tabs as Record<string, { rows?: LineItem[] }>)
-        .flatMap((bucket) => bucket?.rows || []);
-      setAllRows(all);
+      //
+      // BUGFIX: de-duplicated by row id. `data.tabs` is no longer a set of
+      // mutually-exclusive buckets — bff/metrics.py adds CROSS-CUTTING
+      // aggregate tabs (currently `no_receipt`) whose rows are the same rows
+      // already present in their own group's bucket, by design. Flattening
+      // blindly therefore listed every receipt-less row TWICE, which:
+      //   - inflated the "All" count and the CSV export, and
+      //   - put duplicate `key={line.id}` children in one list, so React's
+      //     reconciliation from the "All" render could reuse the wrong nodes
+      //     when switching to another tab — the table kept showing the
+      //     previous tab's rows, which read as "the filter isn't working".
+      // Keyed on id rather than skipping known aggregate names so any future
+      // cross-cutting tab is absorbed here without reintroducing this.
+      const byId = new Map<number, LineItem>();
+      for (const bucket of Object.values(data.tabs as Record<string, { rows?: LineItem[] }>)) {
+        for (const row of bucket?.rows || []) byId.set(row.id, row);
+      }
+      setAllRows([...byId.values()]);
     } catch {}
     setLoading(false);
   }, []);
@@ -516,10 +531,7 @@ function AnalysisHistoryPageInner() {
   // PATCH: tabs now index straight into the backend's per-category buckets —
   // no frontend re-derivation needed. "All" still aggregates everything.
   const activeRows: LineItem[] = useMemo(() => {
-    let rows: LineItem[] = activeTab === "all" ? allRows : (tabData[activeTab]?.rows || []);
-    // eslint-disable-next-line no-console
-    console.log("[AnalysisHistory] activeRows recomputed — activeTab:", activeTab,
-      "| rows before search filter:", rows.length, "| searchNarrative:", JSON.stringify(searchNarrative));
+    const rows: LineItem[] = activeTab === "all" ? allRows : (tabData[activeTab]?.rows || []);
     if (!searchNarrative) return rows;
     const q = searchNarrative.toLowerCase();
     return rows.filter((l) => l.narrative?.toLowerCase().includes(q) || String(l.id).includes(q));
@@ -995,11 +1007,7 @@ function AnalysisHistoryPageInner() {
               )}
               <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xs w-max max-w-full overflow-x-auto">
                 {TABS.map((tab) => (
-                  <button key={tab.key} onClick={() => {
-                    // eslint-disable-next-line no-console
-                    console.log("[AnalysisHistory] tab click:", activeTab, "->", tab.key);
-                    setActiveTab(tab.key);
-                  }}
+                  <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 text-[9px] font-black uppercase tracking-wider rounded-xs transition-all whitespace-nowrap cursor-pointer ${activeTab===tab.key ? "bg-[#222222] text-white shadow-xs" : "text-gray-500 hover:text-primary"}`}>
                     {tab.label}
                     <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-black ${activeTab===tab.key ? "bg-white/20 text-white" : "bg-gray-200 text-gray-600"}`}>
